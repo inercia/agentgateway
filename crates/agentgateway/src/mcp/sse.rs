@@ -9,6 +9,8 @@ use futures_util::StreamExt;
 use rmcp::model::{ClientJsonRpcMessage, ClientRequest};
 use tokio_stream::wrappers::ReceiverStream;
 
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
+
 use crate::http::{DropBody, Request, Response, filters};
 use crate::mcp::handler::RelayInputs;
 use crate::mcp::session;
@@ -121,13 +123,18 @@ impl LegacySSEService {
 				Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
 			}),
 		);
+		let session_id = session.id.clone();
 		let (parts, _) = request.into_parts();
-		Ok(Sse::new(stream).into_response().map(|b| {
+		let mut resp = Sse::new(stream).into_response().map(|b| {
 			DropBody::new(
 				b,
 				session::dropper(self.session_manager.clone(), session, parts),
 			)
-		}))
+		});
+		if let Ok(val) = session_id.parse() {
+			resp.headers_mut().insert(HEADER_SESSION_ID, val);
+		}
+		Ok(resp)
 	}
 }
 
