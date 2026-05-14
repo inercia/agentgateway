@@ -22,6 +22,9 @@ mimalloc = ["dep:mimalloc", "agentgateway/mimalloc"]
 tls-aws-lc = ["agentgateway/tls-aws-lc"]
 tls-openssl = ["agentgateway/tls-openssl"]
 schema = ["agentgateway/schema"]
+# ---- Adobe-only features (kept at end to avoid rebase conflicts with upstream's default-line churn) ----
+glibc = ["agentgateway/glibc"]
+adobe = ["agentgateway/adobe"]
 
 [dependencies]
 pprof-alloc.workspace = true

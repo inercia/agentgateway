@@ -17,6 +17,9 @@ tls-openssl = ["dep:openssl", "dep:rustls-openssl"]
 ui = []
 schema = ["schemars"]
 internal_benches = ["divan"]
+# ---- Adobe-only features (kept at end to avoid rebase conflicts with upstream's default-line churn) ----
+glibc = []
+adobe = []
 
 [dependencies]
 agent-core.workspace = true
