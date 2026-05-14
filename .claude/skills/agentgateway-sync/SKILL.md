@@ -29,10 +29,14 @@ Every `gh` call **must** be prefixed with `env -u GITHUB_TOKEN -u GH_TOKEN` so a
 2. **One git operation per Bash call.** No `&&` chaining. No `$(…)` substitution inside git commands. Each call should match a stable allowlist pattern like `Bash(git -C * rebase *)`.
 3. When a script prints JSON to stdout, **parse the Bash tool's result inline** — scripts support optional `--output`, but prefer stdout for `inspect_state.py` / `pick_sync_branch.py` / `classify_commit.py`. The only files that still go through `$TMP_DIR` are the `make test` log (too large for stdout) and the composed PR body (`gh pr create --body-file` needs a file).
 
+### Git remotes layout
+
+`origin` must be **Adobe-Apis/agentgateway**; `upstream` (and optional `public`) must be **agentgateway/agentgateway**. Agents and fresh clones run **`ensure_git_remotes.py`** before **`inspect_state.py`** so URL variants (SSH vs HTTPS, trailing `.git`) and missing `upstream`/`public` are caught or fixed idempotently. See `references/preconditions.md` section 0.
+
 Paths:
 
 - `SKILL_DIR` — the directory containing this `SKILL.md` (`.claude/skills/agentgateway-sync/`).
-- `SCRIPTS_DIR` — `"$SKILL_DIR/scripts"` (contains `inspect_state.py`, `pick_sync_branch.py`, `run_tests.py`, `classify_commit.py`).
+- `SCRIPTS_DIR` — `"$SKILL_DIR/scripts"` (contains `ensure_git_remotes.py`, `inspect_state.py`, `pick_sync_branch.py`, `run_tests.py`, `classify_commit.py`).
 - `REPO` — absolute path of the user's local `Adobe-Apis/agentgateway` checkout. **Default:** the current working directory (`$PWD`) when the user runs from the clone root.
 - `TMP_DIR` — `"$REPO/.git/sync-tmp"`. `mkdir -p "$TMP_DIR"` before first use (ignored by git).
 - `REPORTS_DIR` — `"$REPO/adobe/sync-reports"`. Versioned summaries land here.
@@ -51,18 +55,19 @@ Classify the user's message into exactly one intent. If ambiguous, ask once — 
 
 1. **Parse target count.** Scan the user message for an explicit number ("sync 5", "port 3"). Default to `1`. Store as `TARGET_COUNT`; initialise `landed_count = 0`.
 2. **Tell the user** the resolved count ("Syncing up to N commits."). 
-3. **Load and follow** `references/preconditions.md` — verify `gh` auth, Adobe fork reachability, upstream remote, token hygiene. Stop on any failure.
-4. **Load and follow** `references/inspect-and-prepare.md` — run `inspect_state.py`, parse the JSON from stdout, handle the `adobe` switch and fast-forward (including landing-artifact auto-recovery). This is the step that decides whether there's anything to do. Run `classify_commit.py` per the risk gate in that reference.
-5. **Load and follow** `references/rebase-and-test.md` — baseline test, pick sync branch, rebase. If rebase stops on a conflict, branch to `references/conflict-triage.md` and return here when the rebase completes.
-6. **Load and follow** `references/push-and-open-pr.md` — push, compose PR body, open PR, post test-results comment, archive to `$REPORTS_DIR/<stem>/`.
-7. **Load and follow** `references/poll-and-land.md` — poll for `/land` using `ScheduleWakeup` (25-min cadence, 48 h ceiling), then force-update `adobe`.
-8. **Loop.** Increment `landed_count`. If `landed_count >= TARGET_COUNT` or `unsynced_count == 0`, stop. Otherwise return to step 4 (re-inspect state) and continue.
+3. **Load `references/preconditions.md` section 0** — run `ensure_git_remotes.py` (dry-run, then `--apply` if needed). Stop on non-fixable `origin` errors.
+4. **Load and follow** the rest of `references/preconditions.md` — verify `gh` auth, Adobe fork reachability, upstream remote, token hygiene. Stop on any failure.
+5. **Load and follow** `references/inspect-and-prepare.md` — run `inspect_state.py`, parse the JSON from stdout, handle the `adobe` switch and fast-forward (including landing-artifact auto-recovery). This is the step that decides whether there's anything to do. Run `classify_commit.py` per the risk gate in that reference.
+6. **Load and follow** `references/rebase-and-test.md` — baseline test, pick sync branch, rebase. If rebase stops on a conflict, branch to `references/conflict-triage.md` and return here when the rebase completes.
+7. **Load and follow** `references/push-and-open-pr.md` — push, compose PR body, open PR, post test-results comment, archive to `$REPORTS_DIR/<stem>/`.
+8. **Load and follow** `references/poll-and-land.md` — poll for `/land` using `ScheduleWakeup` (25-min cadence, 48 h ceiling), then force-update `adobe`.
+9. **Loop.** Increment `landed_count`. If `landed_count >= TARGET_COUNT` or `unsynced_count == 0`, stop. Otherwise return to step 5 (re-inspect state) and continue.
 
 ### landing path
 
 The user invoked landing directly — a PR is already open and they want it landed now (either `/land` has just been commented, or they want to check whether one has appeared).
 
-1. **Load and follow** `references/preconditions.md` — same auth checks as new-sync.
+1. **Load and follow** `references/preconditions.md` — including section 0 (`ensure_git_remotes.py`) when the clone may be fresh or shared, then the usual `gh` auth checks.
 2. **Load `references/poll-and-land.md`** — start at the "separate-invocation entry" section (skip the polling loop, go straight to the one-shot `/land` check and freshness verification). If no authorised `/land` comment exists, tell the user and stop; do not fall into a poll loop unless they explicitly ask for one.
 
 ### status path
@@ -89,4 +94,4 @@ These apply across all paths. Any one of them means stop and surface to the user
 
 ## Stopping condition
 
-A full new-sync invocation runs the 8 steps above in order, landing one upstream commit per loop iteration. The skill exits after `landed_count >= TARGET_COUNT`, `unsynced_count == 0`, user interrupt, a post-rebase test double-failure (before any push), or the 48 h polling ceiling without a `/land` comment.
+A full new-sync invocation runs the 9 steps above in order, landing one upstream commit per loop iteration. The skill exits after `landed_count >= TARGET_COUNT`, `unsynced_count == 0`, user interrupt, a post-rebase test double-failure (before any push), or the 48 h polling ceiling without a `/land` comment.
