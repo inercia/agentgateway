@@ -2,6 +2,24 @@
 
 Load this on every invocation before doing anything mutating. If any check fails, stop and tell the user exactly what to fix. Do not try to proceed through auth/config problems.
 
+## 0. Git remotes (agents / fresh clones)
+
+Before `inspect_state.py`, normalize `origin`, `upstream`, and optional `public` against the canonical layout:
+
+```bash
+python3 "$SKILL_DIR/scripts/ensure_git_remotes.py" "$REPO"
+```
+
+Parse the JSON on stdout. If `errors` contains `wrong_origin` (or similar non-fixable origin issues), stop — the checkout may be the wrong repo or `origin` must be fixed manually (the script does not mutate `origin`).
+
+If `remotes_ok` is false but every failing row has a `fix` string (typically `upstream` / `public` only), re-run once with `--apply`:
+
+```bash
+python3 "$SKILL_DIR/scripts/ensure_git_remotes.py" "$REPO" --apply
+```
+
+Use `--skip-public` only if your workflow does not use a `public` remote. After `remotes_ok` is true, continue with section 1.
+
 ## 1. `gh` CLI authentication
 
 ```bash
@@ -16,9 +34,9 @@ Expected: an **Active** account whose `Token scopes` includes `repo` and `workfl
 env -u GITHUB_TOKEN -u GH_TOKEN gh api repos/Adobe-Apis/agentgateway --jq .full_name
 ```
 
-- Returns `Adobe-Apis/agentgateway` → proceed.
-- Returns **403** with `"Resource protected by organization SAML enforcement"` → the PAT exists but isn't SSO-authorised. The error body contains the exact `https://github.com/enterprises/adobe-prd/sso?authorization_request=…` URL. Give the user that URL, tell them to open it in the browser while signed in as the same account (equivalent to clicking "Authorize" in the dropdown at https://github.com/settings/tokens), and wait for confirmation before retrying.
-- Returns **404** → `GITHUB_TOKEN` is resolving to a different user. Confirm the env-strip is in place.
+- Returns `Adobe-Apis/agentgateway` -> proceed.
+- Returns **403** with `"Resource protected by organization SAML enforcement"` -> the PAT exists but isn't SSO-authorised. The error body contains the exact `https://github.com/enterprises/adobe-prd/sso?authorization_request=…` URL. Give the user that URL, tell them to open it in the browser while signed in as the same account (equivalent to clicking "Authorize" in the dropdown at https://github.com/settings/tokens), and wait for confirmation before retrying.
+- Returns **404** -> `GITHUB_TOKEN` is resolving to a different user. Confirm the env-strip is in place.
 
 Upstream `agentgateway/agentgateway` is public — no auth check needed.
 
@@ -40,14 +58,14 @@ Stop only if clone fails (SSO, network) or the user points at the wrong director
 
 ## 4. `upstream` remote points at the public project
 
-Always force the remote; an older setup may have pointed it at a private mirror.
+Always force the remote; an older setup may have pointed it at a private mirror. Prefer **`ensure_git_remotes.py`** (section 0); manual fallback:
 
 ```bash
 # Run each as its own Bash call.
 git -C "$REPO" remote get-url upstream
 ```
 
-If that returns anything other than `https://github.com/agentgateway/agentgateway.git`:
+If that returns anything other than `https://github.com/agentgateway/agentgateway.git` (or an equivalent SSH form the normalize helper accepts):
 
 ```bash
 git -C "$REPO" remote set-url upstream https://github.com/agentgateway/agentgateway.git
@@ -67,13 +85,13 @@ git -C "$REPO" remote add upstream https://github.com/agentgateway/agentgateway.
 grep -c 'ghp_\|github_pat_' "$REPO/.git/config"
 ```
 
-- Returns `0` → proceed.
-- Returns a non-zero count → stop. Tell the user: revoke the token at https://github.com/settings/tokens, remove the offending section (`git -C "$REPO" config --local --remove-section 'url.<full-url-with-token>'`), and re-add a clean remote. Do not push anything until the file is clean.
+- Returns `0` -> proceed.
+- Returns a non-zero count -> stop. Tell the user: revoke the token at https://github.com/settings/tokens, remove the offending section (`git -C "$REPO" config --local --remove-section 'url.<full-url-with-token>'`), and re-add a clean remote. Do not push anything until the file is clean.
 
 ## 6. Landing prerequisites
 
 No extra checks here beyond the above — landing (force-updating `adobe`) uses the same `gh` credential. Branch protection that blocks non-fast-forward updates is detected at landing time (step `poll-and-land`, section 2.6) and surfaced as an error then, because there is no way to test-push a force-update.
 
-## After all six checks pass
+## After all checks pass
 
 Return to the dispatcher (`SKILL.md`) and continue with the next step (new-sync: `inspect-and-prepare`; landing: `poll-and-land`).

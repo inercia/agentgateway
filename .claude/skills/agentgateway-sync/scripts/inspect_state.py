@@ -26,8 +26,19 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-EXPECTED_UPSTREAM = "https://github.com/agentgateway/agentgateway.git"
+_scripts = Path(__file__).resolve().parent
+if str(_scripts) not in sys.path:
+    sys.path.insert(0, str(_scripts))
+
+from git_remote_norm import (  # noqa: E402
+    EXPECTED_ORIGIN_ADOBE_HTTPS,
+    EXPECTED_UPSTREAM_HTTPS,
+    remotes_equivalent,
+)
+
+EXPECTED_UPSTREAM = EXPECTED_UPSTREAM_HTTPS
 
 
 def run(cmd: list[str]) -> tuple[int, str, str]:
@@ -81,17 +92,30 @@ def main() -> int:
         state[f"remote_{remote}_url"] = url if rc == 0 else None
 
     upstream_url = state.get("remote_upstream_url")
+    origin_url = state.get("remote_origin_url")
+    
+    ensure_script = _scripts / "ensure_git_remotes.py"
+    if origin_url is not None and remotes_equivalent(origin_url, EXPECTED_UPSTREAM):
+        state["errors"].append(
+            "origin remote points at agentgateway/agentgateway (public upstream) — "
+            f"expected Adobe-Apis/agentgateway. Run "
+            f"`python3 {ensure_script} {args.repo}` "
+            f"or `git -C {args.repo} remote set-url origin {EXPECTED_ORIGIN_ADOBE_HTTPS}`"
+        )
+
     if upstream_url is None:
         state["errors"].append(
             "upstream remote is missing — run "
-            f"`git -C {args.repo} remote add upstream {EXPECTED_UPSTREAM}` "
+            f"`python3 {ensure_script} {args.repo} --apply` "
+            f"or `git -C {args.repo} remote add upstream {EXPECTED_UPSTREAM}` "
             "(or `git remote set-url upstream …` if the name exists but points elsewhere)"
         )
-    elif upstream_url != EXPECTED_UPSTREAM:
+    elif not remotes_equivalent(upstream_url, EXPECTED_UPSTREAM):
         state["errors"].append(
             f"upstream remote is {upstream_url!r}, "
-            f"expected {EXPECTED_UPSTREAM!r} — run "
-            f"`git -C {args.repo} remote set-url upstream {EXPECTED_UPSTREAM}`"
+            f"expected public {EXPECTED_UPSTREAM!r} (or SSH equivalent) — run "
+            f"`python3 {ensure_script} {args.repo} --apply` "
+            f"or `git -C {args.repo} remote set-url upstream {EXPECTED_UPSTREAM}`"
         )
 
     repo_gitconfig = os.path.join(args.repo, ".git", "config")
@@ -120,7 +144,7 @@ def main() -> int:
     base_ref = "adobe" if state["adobe_local"] else "origin/adobe"
     state["base_ref_used"] = base_ref
 
-    upstream_ok = upstream_url == EXPECTED_UPSTREAM
+    upstream_ok = upstream_url is not None and remotes_equivalent(upstream_url, EXPECTED_UPSTREAM)
 
     if upstream_ok:
         rc, out, err = git(args.repo, "rev-list", "--count", f"{base_ref}..upstream/main")
