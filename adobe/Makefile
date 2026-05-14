@@ -3,13 +3,15 @@ PUBLIC_REMOTE ?= https://github.com/agentgateway/agentgateway.git
 BUILD_FEATURES ?= ui,adobe
 PLATFORM ?= linux/amd64
 
-# Resolve upstream version from tags. If git describe fails to find a tag,
-# fetch tags from the public repo and retry exactly once.
+# Resolve upstream version from tags. Only consider upstream semver tags
+# (`v*`) so that local Adobe release tags (`adobe-*`) do not get picked up
+# by `git describe`. If git describe fails to find a tag, fetch tags from
+# the public repo and retry exactly once.
 UPSTREAM_VERSION ?= $(shell \
-	v=$$(git describe --tags --always --dirty 2>/dev/null); \
+	v=$$(git describe --tags --match 'v*' --always --dirty 2>/dev/null); \
 	if echo "$$v" | grep -q '^v'; then echo "$$v"; else \
 		git fetch $(PUBLIC_REMOTE) --tags >/dev/null 2>&1; \
-		git describe --tags --always --dirty 2>/dev/null; \
+		git describe --tags --match 'v*' --always --dirty 2>/dev/null; \
 	fi)
 GIT_REVISION ?= $(shell git rev-parse HEAD)
 
