@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__cloud-github__*",
+      "Bash(git reset --hard:*)",
+      "Bash(git reset:*)",
+      "Bash(python3:.claude/skills/agentgateway-sync/scripts/*.py:*)",
+      "Bash(python3 .claude/skills/agentgateway-sync/scripts/*.py:*)",
+      "Bash(grep:*jwt.rs:*)",
+      "Bash(grep:*sse.rs:*)",
+      "Bash(grep:*HEADER_SESSION_ID:*)",
+      "Bash(grep:*mcp-session-id:*)",
+      "Bash(mkdir:*)"
+    ]
+  }
+}

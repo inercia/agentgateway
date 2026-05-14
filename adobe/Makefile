@@ -1,5 +1,6 @@
 ADOBE_VERSION ?= $(shell cat $(dir $(lastword $(MAKEFILE_LIST)))/version)
 PUBLIC_REMOTE ?= https://github.com/agentgateway/agentgateway.git
+BUILD_FEATURES ?= ui,adobe
 PLATFORM ?= linux/amd64
 
 # Resolve upstream version from tags. If git describe fails to find a tag,
@@ -28,6 +29,7 @@ DOCKER_BUILDX = docker buildx build \
 	--build-arg BUILDER=musl \
 	--build-arg VERSION=$(UPSTREAM_VERSION) \
 	--build-arg GIT_REVISION=$(GIT_REVISION) \
+	--build-arg CARGO_BUILD_FEATURES=$(BUILD_FEATURES) \
 	--load \
 	--progress=plain
 
