@@ -21,7 +21,7 @@ When touching protected files, run **`check-patches`** after rebases/merges.
 
 ## Upstream sync automation
 
-Before running the **`agentgateway-sync`** skill (`inspect_state.py`, rebase, PR), run **`ensure_git_remotes.py`** once per machine or fresh clone so `origin`, `upstream`, and `public` match the canonical layout. See `.claude/skills/agentgateway-sync/references/preconditions.md` section 0.
+Before running the **`agentgateway-sync`** skill (`inspect_state.py`, rebase, PR), run **`inspect_state.py <repo> --fix-remotes`** once per machine or fresh clone so `upstream` and optional `public` match the canonical layout (`origin` must already point at Adobe-Apis). See `.claude/skills/agentgateway-sync/references/preconditions.md` section 0.
 
 ## Build / packaging
 

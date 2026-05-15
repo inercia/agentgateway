@@ -75,13 +75,38 @@ def normalize(name: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("repo")
-    ap.add_argument("source_branch",
-                    help="Upstream PR's head.ref, e.g. telemetry/span-links")
-    ap.add_argument("--output", default=None, help="write JSON result to this file instead of stdout")
+    ap.add_argument(
+        "source_branch",
+        nargs="?",
+        default=None,
+        help="Upstream PR's head.ref, e.g. telemetry/span-links. Required "
+             "for single-commit syncs. Ignored when --batch is given.",
+    )
+    ap.add_argument(
+        "--batch",
+        action="store_true",
+        help="Pick a batch sync branch name. Requires --count and --end-short-sha.",
+    )
+    ap.add_argument("--count", type=int, default=None, help="Number of commits in the batch (used with --batch)")
+    ap.add_argument(
+        "--end-short-sha",
+        default=None,
+        help="Short SHA of the last commit in the batch (used with --batch)",
+    )
     args = ap.parse_args()
 
-    source = normalize(args.source_branch)
-    base = f"sync/{source}"
+    if args.batch:
+        if args.count is None or args.end_short_sha is None:
+            _emit({"errors": ["--batch requires both --count and --end-short-sha"]})
+            return 1
+        base = f"sync/batch-{args.count}-to-{args.end_short_sha}"
+    else:
+        if not args.source_branch:
+            _emit({"errors": ["source_branch is required when --batch is not set"]})
+            return 1
+        source = normalize(args.source_branch)
+        base = f"sync/{source}"
+
     candidate = base
     suffix = 0
     superseded: list[dict] = []
@@ -98,7 +123,7 @@ def main() -> int:
             _emit({
                 "errors": [f"more than {SANITY_CAP} prior attempts for {base} — stop and investigate"],
                 "base_name": base,
-            }, args.output)
+            })
             return 1
         candidate = f"{base}-{suffix}"
 
@@ -107,18 +132,12 @@ def main() -> int:
         "base_name": base,
         "suffix": suffix,
         "superseded_prs": superseded,
-    }, args.output)
+    })
     return 0
 
 
-def _emit(data: dict, output_path: str | None) -> None:
-    text = json.dumps(data, indent=2) + "\n"
-    if output_path:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "w") as fh:
-            fh.write(text)
-    else:
-        print(text, end="")
+def _emit(data: dict) -> None:
+    print(json.dumps(data, indent=2))
 
 
 if __name__ == "__main__":

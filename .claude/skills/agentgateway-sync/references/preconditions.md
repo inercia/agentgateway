@@ -4,21 +4,19 @@ Load this on every invocation before doing anything mutating. If any check fails
 
 ## 0. Git remotes (agents / fresh clones)
 
-Before `inspect_state.py`, normalize `origin`, `upstream`, and optional `public` against the canonical layout:
+Before trusting `inspect_state.py`, normalize `origin`, `upstream`, and optional `public`:
 
 ```bash
-python3 "$SKILL_DIR/scripts/ensure_git_remotes.py" "$REPO"
+python3 "$SKILL_DIR/scripts/inspect_state.py" "$REPO" --fix-remotes
 ```
 
-Parse the JSON on stdout. If `errors` contains `wrong_origin` (or similar non-fixable origin issues), stop — the checkout may be the wrong repo or `origin` must be fixed manually (the script does not mutate `origin`).
+Parse the JSON on stdout. If `errors` contains `wrong_origin` (or similar non-fixable origin issues), stop — the checkout may be the wrong repo or `origin` must be fixed manually (`inspect_state.py --fix-remotes` never mutates `origin`).
 
-If `remotes_ok` is false but every failing row has a `fix` string (typically `upstream` / `public` only), re-run once with `--apply`:
+If `upstream`/`public` were wrong but fixable, `remotes_fixed_applied` will be true after a successful `--fix-remotes` run. Use `--skip-public` only if your workflow does not use a `public` remote.
 
-```bash
-python3 "$SKILL_DIR/scripts/ensure_git_remotes.py" "$REPO" --apply
-```
+Dry-run behaviour: omit `--fix-remotes` — `inspect_state.py` still reports remote problems in `errors` without mutating anything.
 
-Use `--skip-public` only if your workflow does not use a `public` remote. After `remotes_ok` is true, continue with section 1.
+After remotes look correct (no blocking errors), continue with section 1.
 
 ## 1. `gh` CLI authentication
 
@@ -58,7 +56,7 @@ Stop only if clone fails (SSO, network) or the user points at the wrong director
 
 ## 4. `upstream` remote points at the public project
 
-Always force the remote; an older setup may have pointed it at a private mirror. Prefer **`ensure_git_remotes.py`** (section 0); manual fallback:
+Always force the remote; an older setup may have pointed it at a private mirror. Prefer **`inspect_state.py "$REPO" --fix-remotes`** (section 0); manual fallback:
 
 ```bash
 # Run each as its own Bash call.
