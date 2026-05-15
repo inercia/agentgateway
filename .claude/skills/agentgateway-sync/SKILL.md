@@ -19,27 +19,35 @@ Linear: the one upstream commit sits at the base (verbatim SHA, author, message,
 
 `sync/<source-branch>` where `<source-branch>` is the upstream PR's `head.ref` with `/` normalised to `-`. On collision with a prior branch (on origin) or a prior PR (Adobe-Apis, any state), append `-1`, `-2`, … The `pick_sync_branch.py` script handles this — you never pick the name by hand.
 
-### `gh` CLI environment prefix
+### Bash / `gh` / MCP conventions
 
-Every `gh` call **must** be prefixed with `env -u GITHUB_TOKEN -u GH_TOKEN` so a stale PAT in the shell environment doesn't mask the `hosts.yml` credential. No exceptions.
+Follow **`references/conventions.md`** — `env -u GITHUB_TOKEN -u GH_TOKEN gh …`,
+`git -C "$REPO" …`, single-git-op Bash calls where you emit commands yourself,
+and when to prefer `cloud-github` MCP reads vs `gh` writes.
 
-### Git invocation discipline
+Parse JSON from helper scripts on **stdout** (`inspect_state.py`, `pick_sync_branch.py`,
+`classify_batch.py`, `find_clean_prefix.py`, `land_pr.py`, …). Larger artifacts use
+files: `run_tests.py --log-dir`, `compose_pr_body.py --out` (markdown for
+`gh pr create --body-file`).
 
-1. **Never** emit a Bash command that starts with `cd <path> && git …`. It triggers the "untrusted hooks from the target directory" approval prompt on every call. Capture the repo path once (`REPO`) and thread it through with `git -C "$REPO" …`.
-2. **One git operation per Bash call.** No `&&` chaining. No `$(…)` substitution inside git commands. Each call should match a stable allowlist pattern like `Bash(git -C * rebase *)`.
-3. When a script prints JSON to stdout, **parse the Bash tool's result inline** — scripts support optional `--output`, but prefer stdout for `inspect_state.py` / `pick_sync_branch.py` / `classify_commit.py`. The only files that still go through `$TMP_DIR` are the `make test` log (too large for stdout) and the composed PR body (`gh pr create --body-file` needs a file).
+**`compose_pr_body.py`:** Prefer **`--merge`** (**`references/push-and-open-pr.md` §3**)
+— pass **`inspect_state`**, **`classify_*`**, and **`run_tests --output`** JSON paths; the script
+joins **`batch_commits`** with classification and refuses placeholder rows **before** writing
+markdown. Fallback: **`--print-template`** + **`--json-file`** (see the module docstring atop
+**`scripts/compose_pr_body.py`**). Validation / render leak errors print structured JSON to
+**stderr** (exit **2**).
 
 ### Git remotes layout
 
-`origin` must be **Adobe-Apis/agentgateway**; `upstream` (and optional `public`) must be **agentgateway/agentgateway**. Agents and fresh clones run **`ensure_git_remotes.py`** before **`inspect_state.py`** so URL variants (SSH vs HTTPS, trailing `.git`) and missing `upstream`/`public` are caught or fixed idempotently. See `references/preconditions.md` section 0.
+`origin` must be **Adobe-Apis/agentgateway**; `upstream` (and optional `public`) must be **agentgateway/agentgateway**. Before inspecting, follow **`references/preconditions.md` section 0** — run `inspect_state.py "$REPO" --fix-remotes` when agents need to auto-repair `upstream`/`public` (never `origin`).
 
 Paths:
 
 - `SKILL_DIR` — the directory containing this `SKILL.md` (`.claude/skills/agentgateway-sync/`).
-- `SCRIPTS_DIR` — `"$SKILL_DIR/scripts"` (contains `ensure_git_remotes.py`, `inspect_state.py`, `pick_sync_branch.py`, `run_tests.py`, `classify_commit.py`).
+- `SCRIPTS_DIR` — `"$SKILL_DIR/scripts"` (`inspect_state.py`, `pick_sync_branch.py`, `run_tests.py`, `classify_commit.py`, `classify_batch.py`, `find_clean_prefix.py`, `land_pr.py`, `compose_pr_body.py`, `check_protected_paths.py`).
 - `REPO` — absolute path of the user's local `Adobe-Apis/agentgateway` checkout. **Default:** the current working directory (`$PWD`) when the user runs from the clone root.
 - `TMP_DIR` — `"$REPO/.git/sync-tmp"`. `mkdir -p "$TMP_DIR"` before first use (ignored by git).
-- `REPORTS_DIR` — `"$REPO/adobe/sync-reports"`. Versioned summaries land here.
+- `REPORTS_DIR` — `"$REPO/.git/sync-reports"`. PR summaries / body copies land here alongside **`TMP_DIR`**, under **`.git/`**, so **`git status`** on the checkout stays clean (nothing under **`adobe/`**). `mkdir -p "$REPORTS_DIR"` before first archive write.
 
 ## Intent routing
 
@@ -47,32 +55,56 @@ Classify the user's message into exactly one intent. If ambiguous, ask once — 
 
 | Intent | Triggers | Action |
 |---|---|---|
-| **new-sync** | "sync", "sync N", "port", "port N", "port PR #X", "pull in", "catch up", "run the weekly sync", "rebase on upstream" | Follow the new-sync path below. |
+| **new-sync** | "sync", "sync N", "sync up to date", "sync all", "sync to upstream/main", "port", "port N", "port PR #X", "pull in", "catch up", "run the weekly sync", "rebase on upstream" | Follow the new-sync path below. |
 | **landing** | "land PR #N", "land the sync PR", "check for /land", "force-push the approved sync PR", "finalise PR #N" | Follow the landing path below. |
 | **status** | "sync status", "what's pending", "any open sync PRs" | Load `references/inspect-and-prepare.md`, run `inspect_state.py`, summarise state. Do not mutate. |
 
-### new-sync path
+### new-sync path (default: batch + yolo + auto-resolve)
 
-1. **Parse target count.** Scan the user message for an explicit number ("sync 5", "port 3"). Default to `1`. Store as `TARGET_COUNT`; initialise `landed_count = 0`.
-2. **Tell the user** the resolved count ("Syncing up to N commits."). 
-3. **Load `references/preconditions.md` section 0** — run `ensure_git_remotes.py` (dry-run, then `--apply` if needed). Stop on non-fixable `origin` errors.
-4. **Load and follow** the rest of `references/preconditions.md` — verify `gh` auth, Adobe fork reachability, upstream remote, token hygiene. Stop on any failure.
-5. **Load and follow** `references/inspect-and-prepare.md` — run `inspect_state.py`, parse the JSON from stdout, handle the `adobe` switch and fast-forward (including landing-artifact auto-recovery). This is the step that decides whether there's anything to do. Run `classify_commit.py` per the risk gate in that reference.
-6. **Load and follow** `references/rebase-and-test.md` — baseline test, pick sync branch, rebase. If rebase stops on a conflict, branch to `references/conflict-triage.md` and return here when the rebase completes.
-7. **Load and follow** `references/push-and-open-pr.md` — push, compose PR body, open PR, post test-results comment, archive to `$REPORTS_DIR/<stem>/`.
-8. **Load and follow** `references/poll-and-land.md` — poll for `/land` using `ScheduleWakeup` (25-min cadence, 48 h ceiling), then force-update `adobe`.
-9. **Loop.** Increment `landed_count`. If `landed_count >= TARGET_COUNT` or `unsynced_count == 0`, stop. Otherwise return to step 5 (re-inspect state) and continue.
+The default flow for any `sync N` (including N=1) is **batch + auto-land + auto-resolve**: each iteration of the loop opens one PR with up to `BATCH_SIZE` upstream commits + Adobe commits on top, force-updates `adobe` immediately when both gates (clean rebase + tests pass) succeed, attempts auto-resolve on superficial conflicts, and continues looping until the target is hit.
+
+1. **Parse target count.**
+   - Explicit number ("sync 5", "port 3") → `TARGET_COUNT = N`.
+   - "sync up to date", "sync all", "sync to upstream/main", or no number at all → `TARGET_COUNT = "all"` (resolved to `unsynced_count` after step 5's first inspect).
+   - Default `BATCH_SIZE = 50`. If the user passed `--batch-size N` (or "in batches of N", "50 at a time"), override.
+   - Initialise `landed_count = 0`, `pr_log = []`, `halts = []`.
+
+2. **Tell the user** the resolved plan in one line: e.g. `"Syncing up to N commits in batches of 50 with auto-land + auto-resolve."` or `"Syncing all unsynced commits in batches of 50."`.
+
+3. **Load `references/preconditions.md` section 0** — run `inspect_state.py "$REPO" --fix-remotes` when `upstream`/`public` need repair. Stop on non-fixable `origin` errors.
+
+4. **Load and follow** the rest of `references/preconditions.md` — verify `gh` auth, Adobe fork reachability, upstream remote, token hygiene. Stop on any failure. (Run **once per top-level invocation**, not per loop iteration.)
+
+5. **Inspect and classify (per loop iteration).** Load and follow `references/inspect-and-prepare.md` — run `inspect_state.py --count <BATCH_SIZE>`, parse the JSON, handle the `adobe` switch and fast-forward (including landing-artifact auto-recovery), then run `classify_batch.py` for informational classification (no gate).
+
+   On the **first iteration** when `TARGET_COUNT == "all"`, set `TARGET_COUNT = unsynced_count` for the rest of the run (so the loop has a stable bound and the per-iteration dispatcher message is meaningful).
+
+6. **Load and follow** `references/batch-and-yolo.md` — pick branch, rebase the batch, bisect on conflict, run tests (`run_tests.py --retry-once` where referenced), push, compose PR via `compose_pr_body.py` (`references/push-and-open-pr.md` §3), open PR, **auto-land** with `land_pr.py` when both gates pass, then **step 10** (checkout **`adobe`**, delete landed **`sync/*`** — remote delete best effort). This reference may load `references/auto-resolve-conflict.md` mid-flow when bisection finds a partial-clean prefix.
+
+   Map terminal outcomes using **`references/batch-and-yolo.md` § Dispatcher outcomes** (and the summary table at the bottom of `auto-resolve-conflict.md` for auto-resolve-specific rows). Typical branches:
+
+   - **Happy paths** (`landed_count` increases, loop continues) — full batch land; prefix+boundary auto-resolve land.
+   - **Manual halts** (`halts[]`, stop loop) — protected-path / semantic conflicts during auto-resolve; `clean_count == 0`; bisection anomaly.
+   - **`/land` required** (`halts[]` + open `[TESTS FAILING]` PR if applicable) — gate 2 failed after `--retry-once`; maintainer reviews then **`land PR #N`** per `poll-and-land.md`.
+
+7. **Loop guard.** If `landed_count >= TARGET_COUNT` or `unsynced_count == 0` (re-checked at next iteration's step 5) or any "stop loop" outcome above fired → exit loop.
+
+8. **Final summary** (always, even on halt). Print to the user:
+   - `Landed <landed_count> of <TARGET_COUNT> commits across <len(pr_log)> PR(s).`
+   - For each entry in `pr_log`: PR number, type (`batch` / `auto-resolve`), commit count, link.
+   - For each entry in `halts`: reason, conflicting commit if applicable, PR link, what to do next.
+   - Suggest next action: re-invoke after triaging halts, or "done — fork is up to date" when nothing remains.
 
 ### landing path
 
-The user invoked landing directly — a PR is already open and they want it landed now (either `/land` has just been commented, or they want to check whether one has appeared).
+The user invoked landing directly — a PR is already open and they want it landed now (typically after a maintainer commented `/land`). Batch+yolo happy paths auto-land inline and skip this entry.
 
-1. **Load and follow** `references/preconditions.md` — including section 0 (`ensure_git_remotes.py`) when the clone may be fresh or shared, then the usual `gh` auth checks.
-2. **Load `references/poll-and-land.md`** — start at the "separate-invocation entry" section (skip the polling loop, go straight to the one-shot `/land` check and freshness verification). If no authorised `/land` comment exists, tell the user and stop; do not fall into a poll loop unless they explicitly ask for one.
+1. **Load and follow** `references/preconditions.md` — including section 0 (`inspect_state.py "$REPO" --fix-remotes`) when the clone may be fresh or shared, then the usual `gh` auth checks.
+2. **Load `references/poll-and-land.md`** section 2 — one-shot `/land` scan + freshness + `land_pr.py`, then **§2.8** (checkout **`adobe`**, delete **`sync/*`** head ref when applicable). If no authorised `/land` exists yet, tell the user and stop.
 
 ### status path
 
-1. **Load and follow** `references/inspect-and-prepare.md` for the inspection sequence (classification gate applies when `unsynced_count > 0`).
+1. **Load and follow** `references/inspect-and-prepare.md` for the inspection sequence. Pass `--count 1` since you don't intend to act — you only want the unsynced count and the oldest commit metadata.
 2. Additionally list open Adobe-Apis PRs with `head.ref` matching `sync/*`:
    ```bash
    env -u GITHUB_TOKEN -u GH_TOKEN gh pr list --repo Adobe-Apis/agentgateway --state open --search "head:sync/" --json number,title,headRefName,createdAt
@@ -84,14 +116,24 @@ The user invoked landing directly — a PR is already open and they want it land
 These apply across all paths. Any one of them means stop and surface to the user; never auto-recover.
 
 - Baseline `make test` has any failures or new warnings.
-- Semantic rebase conflict (see `references/conflict-triage.md` for the superficial-vs-semantic rule).
+- Semantic conflict during auto-resolve (see **`references/auto-resolve-conflict.md`** §5 classification rules).
 - SSO error on `gh api repos/Adobe-Apis/*` (not recoverable without browser).
 - Embedded token in `.git/config`, `~/.gitconfig`, or `git remote -v` output.
 - Upstream commit subject has no `(#NNNN)` suffix (non-standard merge).
-- Post-rebase test counts show failures or new warnings vs. baseline.
+- Post-rebase test double-failure (after `run_tests.py --retry-once`) — open `[TESTS FAILING]` PR if applicable and hand off to `/land`; do not auto-land.
+- Bisection result `clean_count == clean_count == batch_count` (script disagrees with itself) — surface attempts log, stop.
 - `adobe..upstream/main` (or `origin/adobe..upstream/main` when local branch is missing) returns unexpectedly empty or much smaller than anticipated.
-- Freshness check at landing time shows `adobe` has moved since the PR was created.
+- Freshness check before force-update shows `adobe` has moved since the PR was created.
 
 ## Stopping condition
 
-A full new-sync invocation runs the 9 steps above in order, landing one upstream commit per loop iteration. The skill exits after `landed_count >= TARGET_COUNT`, `unsynced_count == 0`, user interrupt, a post-rebase test double-failure (before any push), or the 48 h polling ceiling without a `/land` comment.
+A full new-sync invocation runs the 8 steps above in order, looping through batches until done or halted. Each iteration lands up to `BATCH_SIZE` commits via batch+yolo and may additionally land 1 more via auto-resolve. The skill exits the loop on:
+
+- `landed_count >= TARGET_COUNT` (target met)
+- `unsynced_count == 0` (fork is up to date)
+- User interrupt (Ctrl-C / dropped session — repo state is recoverable; next invocation restarts cleanly)
+- Any "stop loop" outcome from the table in step 6 (protected-path conflict, semantic hunk, test failure, `clean_count == 0`)
+
+After exiting the loop, step 8 (final summary) always runs — the user gets a single coherent report of what landed, what halted, and what to do next.
+
+For multi-day burndowns: the user can re-invoke `sync up to date` after triaging halts, and the loop picks up from wherever `adobe` is now (the auto-recovery in `inspect-and-prepare.md` handles the case where a halted PR was landed manually in the meantime).

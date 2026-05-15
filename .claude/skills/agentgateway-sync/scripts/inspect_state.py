@@ -2,7 +2,10 @@
 """Inspect the agentgateway checkout for the upstream sync skill.
 
 Usage:
-    python3 inspect_state.py <repo_path> [--no-fetch]
+    python3 inspect_state.py <repo_path> [--no-fetch] [--fix-remotes] [--skip-public]
+
+--fix-remotes: mutates git config to add/fix `upstream` and optional `public`
+remotes only (never `origin`). Stop with JSON errors if `origin` is wrong.
 
 Emits a single JSON object to stdout describing everything the
 agentgateway-sync skill needs to decide its next move:
@@ -35,6 +38,9 @@ if str(_scripts) not in sys.path:
 from git_remote_norm import (  # noqa: E402
     EXPECTED_ORIGIN_ADOBE_HTTPS,
     EXPECTED_UPSTREAM_HTTPS,
+    canonical_origin_adobe,
+    canonical_upstream,
+    normalize_github_remote,
     remotes_equivalent,
 )
 
@@ -56,6 +62,121 @@ def gh(*args: str) -> tuple[int, str, str]:
     return run(["gh", *args])
 
 
+def fix_git_remotes(repo: str, skip_public: bool) -> tuple[list[str], bool]:
+    """Idempotent fix for upstream/public only. Origin must be correct (manual).
+
+    Returns (blocking_errors, applied_git_remote_mutations).
+    """
+    origin_raw = None
+    rc, out, _ = git(repo, "remote", "get-url", "origin")
+    if rc == 0:
+        origin_raw = out
+
+    _ORIGIN_CANON = canonical_origin_adobe()
+    _UPSTREAM_CANON = canonical_upstream()
+    blocking: list[str] = []
+    checks: list[dict] = []
+
+    origin_norm = normalize_github_remote(origin_raw) if origin_raw else None
+    origin_ok = origin_norm == _ORIGIN_CANON
+
+    if origin_raw is None:
+        blocking.append(
+            "wrong_origin: origin remote is missing — clone Adobe-Apis/agentgateway "
+            f"(or `git -C {repo} remote add origin {EXPECTED_ORIGIN_ADOBE_HTTPS}`)"
+        )
+    elif origin_norm == _UPSTREAM_CANON:
+        blocking.append(
+            "wrong_origin: origin points at public agentgateway/agentgateway — "
+            f"expected Adobe-Apis/agentgateway. Clone the fork or "
+            f"`git -C {repo} remote set-url origin {EXPECTED_ORIGIN_ADOBE_HTTPS}`"
+        )
+    elif not origin_ok:
+        blocking.append(
+            f"wrong_origin: origin is {origin_raw!r} — expected Adobe-Apis/agentgateway "
+            "(HTTPS or git@github.com:Adobe-Apis/agentgateway.git). Fix manually."
+        )
+
+    if blocking:
+        return blocking, False
+
+    upstream_raw = None
+    rc, out, _ = git(repo, "remote", "get-url", "upstream")
+    if rc == 0:
+        upstream_raw = out
+    upstream_norm = normalize_github_remote(upstream_raw) if upstream_raw else None
+    upstream_ok = upstream_norm == _UPSTREAM_CANON
+
+    if upstream_raw is None:
+        checks.append(
+            {
+                "name": "upstream",
+                "ok": False,
+                "current": None,
+                "fix": f"git -C {repo} remote add upstream {EXPECTED_UPSTREAM_HTTPS}",
+            }
+        )
+    elif not upstream_ok:
+        checks.append(
+            {
+                "name": "upstream",
+                "ok": False,
+                "current": upstream_raw,
+                "fix": f"git -C {repo} remote set-url upstream {EXPECTED_UPSTREAM_HTTPS}",
+            }
+        )
+    else:
+        checks.append({"name": "upstream", "ok": True, "current": upstream_raw, "fix": None})
+
+    if not skip_public:
+        public_raw = None
+        rc, out, _ = git(repo, "remote", "get-url", "public")
+        if rc == 0:
+            public_raw = out
+        public_norm = normalize_github_remote(public_raw) if public_raw else None
+        public_ok = public_norm == _UPSTREAM_CANON
+
+        if public_raw is None:
+            checks.append(
+                {
+                    "name": "public",
+                    "ok": False,
+                    "current": None,
+                    "fix": f"git -C {repo} remote add public {EXPECTED_UPSTREAM_HTTPS}",
+                }
+            )
+        elif not public_ok:
+            checks.append(
+                {
+                    "name": "public",
+                    "ok": False,
+                    "current": public_raw,
+                    "fix": f"git -C {repo} remote set-url public {EXPECTED_UPSTREAM_HTTPS}",
+                }
+            )
+        else:
+            checks.append({"name": "public", "ok": True, "current": public_raw, "fix": None})
+
+    applied = False
+    for c in checks:
+        if c["ok"] or not c.get("fix"):
+            continue
+        if c["name"] not in ("upstream", "public"):
+            continue
+        if c["name"] == "public" and skip_public:
+            continue
+        had_url = c["current"]
+        if had_url is None:
+            rc, _, err = git(repo, "remote", "add", c["name"], EXPECTED_UPSTREAM_HTTPS)
+        else:
+            rc, _, err = git(repo, "remote", "set-url", c["name"], EXPECTED_UPSTREAM_HTTPS)
+        if rc != 0:
+            return [f"git failed for remote {c['name']}: {err}"], applied
+        applied = True
+
+    return [], applied
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("repo", help="Path to Adobe-Apis/agentgateway checkout")
@@ -64,8 +185,30 @@ def main() -> int:
         action="store_true",
         help="Skip `git fetch` — trust what's cached locally",
     )
-    ap.add_argument("--output", default=None, help="write JSON result to this file instead of stdout")
+    ap.add_argument(
+        "--count",
+        type=int,
+        default=1,
+        help="Batch size (default 1). When >1, the JSON includes a `batch` "
+             "section with the first N unsynced commits and `batch_end_sha`. "
+             "Capped at unsynced_count.",
+    )
+    ap.add_argument(
+        "--fix-remotes",
+        action="store_true",
+        help="Apply fixable upstream/public remote layout before inspecting",
+    )
+    ap.add_argument(
+        "--skip-public",
+        action="store_true",
+        help="With --fix-remotes: do not add or repair the public remote",
+    )
+
     args = ap.parse_args()
+
+    if args.count < 1:
+        print(json.dumps({"errors": [f"--count must be >= 1, got {args.count}"]}, indent=2))
+        return 1
 
     state: dict = {
         "repo": os.path.abspath(args.repo),
@@ -74,8 +217,16 @@ def main() -> int:
 
     if not os.path.isdir(os.path.join(args.repo, ".git")):
         state["errors"].append(f"{args.repo} is not a git checkout")
-        _emit(state, args.output)
+        _emit(state)
         return 1
+
+    if args.fix_remotes:
+        fatal, applied_fix = fix_git_remotes(os.path.abspath(args.repo), args.skip_public)
+        state["remotes_fixed_applied"] = applied_fix
+        if fatal:
+            state["errors"].extend(fatal)
+            _emit(state)
+            return 1
 
     rc, out, err = git(args.repo, "status", "--porcelain")
     state["working_tree_clean"] = (rc == 0 and not out)
@@ -94,19 +245,18 @@ def main() -> int:
     upstream_url = state.get("remote_upstream_url")
     origin_url = state.get("remote_origin_url")
     
-    ensure_script = _scripts / "ensure_git_remotes.py"
+    inspect_self = _scripts / "inspect_state.py"
     if origin_url is not None and remotes_equivalent(origin_url, EXPECTED_UPSTREAM):
         state["errors"].append(
             "origin remote points at agentgateway/agentgateway (public upstream) — "
-            f"expected Adobe-Apis/agentgateway. Run "
-            f"`python3 {ensure_script} {args.repo}` "
-            f"or `git -C {args.repo} remote set-url origin {EXPECTED_ORIGIN_ADOBE_HTTPS}`"
+            f"expected Adobe-Apis/agentgateway. Fix manually: "
+            f"`git -C {args.repo} remote set-url origin {EXPECTED_ORIGIN_ADOBE_HTTPS}`"
         )
 
     if upstream_url is None:
         state["errors"].append(
             "upstream remote is missing — run "
-            f"`python3 {ensure_script} {args.repo} --apply` "
+            f"`python3 {inspect_self} {args.repo} --fix-remotes` "
             f"or `git -C {args.repo} remote add upstream {EXPECTED_UPSTREAM}` "
             "(or `git remote set-url upstream …` if the name exists but points elsewhere)"
         )
@@ -114,7 +264,7 @@ def main() -> int:
         state["errors"].append(
             f"upstream remote is {upstream_url!r}, "
             f"expected public {EXPECTED_UPSTREAM!r} (or SSH equivalent) — run "
-            f"`python3 {ensure_script} {args.repo} --apply` "
+            f"`python3 {inspect_self} {args.repo} --fix-remotes` "
             f"or `git -C {args.repo} remote set-url upstream {EXPECTED_UPSTREAM}`"
         )
 
@@ -162,6 +312,7 @@ def main() -> int:
             "oldest_short_sha": None,
             "oldest_subject": None,
             "oldest_author_date": None,
+            "prev_upstream_sha": None,
             "pr_num": None,
             "source_branch": None,
         }
@@ -194,12 +345,55 @@ def main() -> int:
             if rc2 == 0:
                 state["oldest_author_date"] = date
 
+            rc2, parent, _ = git(args.repo, "rev-parse", f"{oldest}^")
+            state["prev_upstream_sha"] = parent if rc2 == 0 and parent else None
+
     if state["pr_num"]:
         rc, out, err = gh("api", f"repos/agentgateway/agentgateway/pulls/{state['pr_num']}", "--jq", ".head.ref")
         if rc == 0 and out:
             state["source_branch"] = out
         else:
             state["errors"].append(f"gh api failed for upstream PR #{state['pr_num']}: {err}")
+
+    state["batch_requested"] = args.count
+    state["batch_count"] = 0
+    state["batch_end_sha"] = None
+    state["batch_end_short_sha"] = None
+    state["batch_commits"] = []
+
+    if upstream_ok and state.get("unsynced_count"):
+        effective_count = min(args.count, state["unsynced_count"])
+        rc, out, _ = git(
+            args.repo,
+            "log",
+            "--reverse",
+            "--no-merges",
+            "--pretty=%H%x09%h%x09%aI%x09%s",
+            f"{base_ref}..upstream/main",
+        )
+        if rc == 0 and out:
+            commits: list[dict] = []
+            for line in out.splitlines()[:effective_count]:
+                parts = line.split("\t", 3)
+                if len(parts) != 4:
+                    continue
+                full_sha, short_sha, author_date, subject = parts
+                m = re.search(r"\(#(\d+)\)\s*$", subject)
+                pr_num = m.group(1) if m else None
+                commits.append(
+                    {
+                        "sha": full_sha,
+                        "short_sha": short_sha,
+                        "author_date": author_date,
+                        "subject": subject,
+                        "pr_num": pr_num,
+                    }
+                )
+            state["batch_count"] = len(commits)
+            state["batch_commits"] = commits
+            if commits:
+                state["batch_end_sha"] = commits[-1]["sha"]
+                state["batch_end_short_sha"] = commits[-1]["short_sha"]
 
     rc, out, err = gh("api", "repos/Adobe-Apis/agentgateway", "--jq", ".full_name")
     state["adobe_apis_reachable"] = (rc == 0 and out == "Adobe-Apis/agentgateway")
@@ -209,20 +403,12 @@ def main() -> int:
             f"authorisation is missing. gh stderr: {err}"
         )
 
-    _emit(state, args.output)
+    _emit(state)
     return 0
 
 
-def _emit(data: dict, output_path: str | None) -> None:
-    text = json.dumps(data, indent=2) + "\n"
-    if output_path:
-        dirname = os.path.dirname(output_path)
-        if dirname:
-            os.makedirs(dirname, exist_ok=True)
-        with open(output_path, "w") as fh:
-            fh.write(text)
-    else:
-        print(text, end="")
+def _emit(data: dict) -> None:
+    print(json.dumps(data, indent=2))
 
 
 if __name__ == "__main__":
