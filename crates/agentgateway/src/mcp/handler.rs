@@ -20,6 +20,7 @@ use crate::http::Response;
 use crate::http::sessionpersistence::MCPSession;
 use crate::mcp;
 use crate::mcp::mergestream::{MergeFn, Messages};
+use crate::mcp::multiplex_naming;
 use crate::mcp::rbac::{CelExecWrapper, McpAuthorizationSet};
 use crate::mcp::router::McpBackendGroup;
 use crate::mcp::streamablehttp::ServerSseMessage;
@@ -28,16 +29,7 @@ use crate::mcp::{ClientError, FailureMode, MCPInfo, mergestream, rbac, upstream}
 use crate::proxy::httpproxy::PolicyClient;
 use crate::telemetry::log::{AsyncLog, SpanWriteOnDrop, SpanWriter};
 
-const DELIMITER: &str = "_";
-
-fn resource_name(default_target_name: Option<&String>, target: &str, name: &str) -> String {
-	if default_target_name.is_none() {
-		format!("{target}{DELIMITER}{name}")
-	} else {
-		name.to_string()
-	}
-}
-
+#[cfg_attr(feature = "adobe", allow(dead_code))]
 fn resource_uri(default_target_name: Option<&String>, target: &str, uri: &str) -> String {
 	if default_target_name.is_none() {
 		// Transform URI to service+scheme:// format for multiplexing
@@ -72,12 +64,58 @@ fn rewrite_resource_update_message(
 	message
 }
 
+fn apply_multiplex_to_listed_resource(
+	default_target_name: Option<&String>,
+	server_name: &str,
+	mut r: rmcp::model::Resource,
+) -> rmcp::model::Resource {
+	#[cfg(feature = "adobe")]
+	{
+		r.uri = crate::mcp::mcp_apps::routing::wrap_resource_uri_mixed(
+			default_target_name,
+			server_name,
+			&r.uri,
+		);
+		r.name = multiplex_naming::resource_name(default_target_name, server_name, &r.name);
+		r
+	}
+	#[cfg(not(feature = "adobe"))]
+	{
+		r.uri = resource_uri(default_target_name, server_name, &r.uri);
+		r
+	}
+}
+
+fn apply_multiplex_to_resource_template(
+	default_target_name: Option<&String>,
+	server_name: &str,
+	rt: rmcp::model::ResourceTemplate,
+) -> rmcp::model::ResourceTemplate {
+	#[cfg(feature = "adobe")]
+	{
+		let mut rt = rt;
+		rt.uri_template = crate::mcp::mcp_apps::routing::wrap_resource_template_uri_mixed(
+			default_target_name,
+			server_name,
+			&rt.uri_template,
+		);
+		rt.name = multiplex_naming::resource_name(default_target_name, server_name, &rt.name);
+		rt
+	}
+	#[cfg(not(feature = "adobe"))]
+	{
+		let _ = (default_target_name, server_name);
+		rt
+	}
+}
+
 #[derive(Debug, Clone)]
 pub struct Relay {
 	pub(crate) upstreams: Arc<upstream::UpstreamGroup>,
 	pub policies: McpAuthorizationSet,
 	pub(crate) mcp_guardrails: Option<Arc<crate::mcp::guardrails::McpGuardrails>>,
 	pub(crate) policy_client: PolicyClient,
+	pub(crate) capabilities: Arc<crate::mcp::mcp_apps::capabilities::TargetCapabilities>,
 }
 
 pub struct RelayInputs {
@@ -108,6 +146,7 @@ impl Relay {
 			policies,
 			mcp_guardrails: None,
 			policy_client: client,
+			capabilities: Arc::new(crate::mcp::mcp_apps::capabilities::TargetCapabilities::new()),
 		})
 	}
 	pub fn with_policies(&self, policies: McpAuthorizationSet) -> Self {
@@ -116,6 +155,7 @@ impl Relay {
 			policies,
 			mcp_guardrails: self.mcp_guardrails.clone(),
 			policy_client: self.policy_client.clone(),
+			capabilities: self.capabilities.clone(),
 		}
 	}
 
@@ -131,15 +171,7 @@ impl Relay {
 		&'a self,
 		res: &'b str,
 	) -> Result<(&'a str, &'b str), UpstreamError> {
-		if let Some(default) = self.upstreams.default_target_name.as_ref() {
-			Ok((default.as_str(), res))
-		} else {
-			res
-				.split_once(DELIMITER)
-				.ok_or(UpstreamError::InvalidRequest(
-					"invalid resource name".to_string(),
-				))
-		}
+		multiplex_naming::parse_resource_name(self.upstreams.default_target_name.as_ref(), res)
 	}
 
 	/// Reverse of `resource_uri`: extracts the service name and original URI from a
@@ -336,11 +368,17 @@ impl Relay {
 						})
 						// Rename to handle multiplexing
 						.map(|mut t| {
-							t.name = Cow::Owned(resource_name(
+							t.name = Cow::Owned(multiplex_naming::resource_name(
 								default_target_name.as_ref(),
 								server_name.as_str(),
 								&t.name,
 							));
+							#[cfg(feature = "adobe")]
+							crate::mcp::mcp_apps::routing::rewrite_tool_ui_meta(
+								default_target_name.as_ref(),
+								server_name.as_str(),
+								&mut t.meta,
+							);
 							t
 						})
 						.collect_vec()
@@ -359,6 +397,7 @@ impl Relay {
 
 	pub fn merge_initialize(&self, pv: ProtocolVersion, multiplexing: bool) -> Box<MergeFn> {
 		let resource_subscribe = self.upstreams.stateful();
+		let capabilities = self.capabilities.clone();
 		Box::new(move |s, _cel| {
 			if !multiplexing {
 				// Happy case: we can forward everything
@@ -381,6 +420,9 @@ impl Relay {
 
 			for (server_name, v) in s {
 				if let ServerResult::InitializeResult(r) = v {
+					if multiplexing {
+						capabilities.store(server_name.as_str(), r.capabilities.clone());
+					}
 					if r.protocol_version.to_string() < lowest_version.to_string() {
 						lowest_version = r.protocol_version;
 					}
@@ -419,7 +461,11 @@ impl Relay {
 							)
 						})
 						.map(|mut p| {
-							p.name = resource_name(default_target_name.as_ref(), server_name.as_str(), &p.name);
+							p.name = multiplex_naming::resource_name(
+								default_target_name.as_ref(),
+								server_name.as_str(),
+								&p.name,
+							);
 							p
 						})
 						.collect_vec()
@@ -457,10 +503,12 @@ impl Relay {
 								cel,
 							)
 						})
-						// Prefix URI with service name when multiplexing to avoid conflicts
-						.map(|mut r| {
-							r.uri = resource_uri(default_target_name.as_ref(), server_name.as_str(), &r.uri);
-							r
+						.map(|r| {
+							apply_multiplex_to_listed_resource(
+								default_target_name.as_ref(),
+								server_name.as_str(),
+								r,
+							)
 						})
 						.collect_vec()
 				})
@@ -497,14 +545,12 @@ impl Relay {
 								cel,
 							)
 						})
-						// Prefix uri_template with service name when multiplexing
-						.map(|mut rt| {
-							rt.uri_template = resource_uri(
+						.map(|rt| {
+							apply_multiplex_to_resource_template(
 								default_target_name.as_ref(),
 								server_name.as_str(),
-								&rt.uri_template,
-							);
-							rt
+								rt,
+							)
 						})
 						.collect_vec()
 				})
@@ -726,6 +772,36 @@ impl Relay {
 			None => messages_to_response(id, ms, None),
 		}
 	}
+
+	pub fn parse_resource_uri(&self, uri: &str) -> Result<(String, String), UpstreamError> {
+		crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(
+			self.upstreams.default_target_name.as_ref(),
+			uri,
+		)
+	}
+
+	pub async fn send_single_map_response<F>(
+		&self,
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		service_name: &str,
+		map_msg: F,
+		mcp_log: Option<AsyncLog<MCPInfo>>,
+	) -> Result<Response, UpstreamError>
+	where
+		F: FnMut(&mut ServerJsonRpcMessage) + Send + 'static,
+	{
+		let id = r.id.clone();
+		let Ok(us) = self.upstreams.get(service_name) else {
+			return Err(UpstreamError::InvalidRequest(format!(
+				"unknown service {service_name}"
+			)));
+		};
+		let stream = us.generic_stream(r, &ctx).await?;
+
+		messages_to_response_mapped(id, stream, mcp_log, map_msg)
+	}
+
 	pub async fn send_notification(
 		&self,
 		r: JsonRpcNotification<ClientNotification>,
@@ -815,6 +891,156 @@ impl Relay {
 			))
 			.with_instructions(instructions.unwrap_or_default())
 	}
+
+	pub fn all_target_names(&self) -> Vec<String> {
+		self
+			.upstreams
+			.iter_named()
+			.map(|(n, _)| n.to_string())
+			.collect()
+	}
+
+	/// Fan out a request only to named upstreams (capability-filtered lists/tasks).
+	///
+	/// Unlike [`Self::send_fanout`], when **every** filtered upstream fails or the filter
+	/// yields no targets, this still runs the merge on an empty result stream so list-style
+	/// methods return an empty merged payload (e.g. no tasks) instead of
+	/// `InvalidRequest("no upstreams available")`.
+	pub async fn send_fanout_to(
+		&self,
+		targets: &[String],
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		merge: Box<MergeFn>,
+	) -> Result<Response, UpstreamError> {
+		let id = r.id.clone();
+		let target_set: std::collections::HashSet<&str> = targets.iter().map(String::as_str).collect();
+		let mut streams = Vec::new();
+
+		let futs: Vec<_> = self
+			.upstreams
+			.iter_named()
+			.filter(|(name, _)| target_set.contains(name.as_str()))
+			.map(|(name, con)| {
+				let r = r.clone();
+				let ctx = &ctx;
+				async move { (name, con.generic_stream(r, ctx).await) }
+			})
+			.collect();
+
+		let fut_results = futures::future::join_all(futs).await;
+
+		for (name, result) in fut_results {
+			match result {
+				Ok(s) => streams.push((name, s)),
+				Err(e) => {
+					if self.upstreams.failure_mode == FailureMode::FailOpen {
+						warn!("upstream '{}' failed during fanout, skipping: {}", name, e);
+					} else {
+						return Err(e);
+					}
+				},
+			}
+		}
+
+		if streams.is_empty() {
+			let ms =
+				mergestream::MergeStream::new(vec![], id.clone(), merge, self.upstreams.failure_mode);
+			return messages_to_response(id, ms, None);
+		}
+
+		let ms = mergestream::MergeStream::new(streams, id.clone(), merge, self.upstreams.failure_mode);
+		messages_to_response(id, ms, None)
+	}
+}
+
+#[cfg(feature = "adobe")]
+impl Relay {
+	pub fn parse_task_id(&self, id: &str) -> Result<(String, String), UpstreamError> {
+		crate::mcp::mcp_apps::routing::parse_task_id(self.upstreams.default_target_name.as_ref(), id)
+	}
+
+	pub fn merge_tasks(&self, cel: CelExecWrapper) -> Box<MergeFn> {
+		use rmcp::model::ListTasksResult;
+		let policies = self.policies.clone();
+		let default_target_name = self.upstreams.default_target_name.clone();
+		Box::new(move |streams| {
+			let tasks = streams
+				.into_iter()
+				.flat_map(|(server_name, s)| {
+					let tasks = match s {
+						ServerResult::ListTasksResult(ltr) => ltr.tasks,
+						_ => vec![],
+					};
+					tasks
+						.into_iter()
+						.filter(|t| {
+							policies.validate(
+								&rbac::ResourceType::Task(rbac::ResourceId::new(
+									server_name.to_string(),
+									t.task_id.to_string(),
+								)),
+								&cel,
+							)
+						})
+						.map(|mut t| {
+							t.task_id = multiplex_naming::resource_name(
+								default_target_name.as_ref(),
+								server_name.as_str(),
+								&t.task_id,
+							);
+							t
+						})
+						.collect_vec()
+				})
+				.collect_vec();
+			Ok(ListTasksResult::new(tasks).into())
+		})
+	}
+}
+
+fn messages_to_response(
+	id: RequestId,
+	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
+	mcp_log: Option<AsyncLog<MCPInfo>>,
+) -> Result<Response, UpstreamError> {
+	messages_to_response_mapped(id, stream, mcp_log, |_: &mut ServerJsonRpcMessage| {})
+}
+
+fn messages_to_response_mapped<F>(
+	id: RequestId,
+	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
+	mcp_log: Option<AsyncLog<MCPInfo>>,
+	mut map_msg: F,
+) -> Result<Response, UpstreamError>
+where
+	F: FnMut(&mut ServerJsonRpcMessage) + Send + 'static,
+{
+	use futures_util::StreamExt;
+	let request_id = id.clone();
+	let mut captured_terminal = false;
+	let stream = stream.map(move |rpc| {
+		let (mut msg, capture_terminal_for_msg) = match rpc {
+			Ok(rpc) => (rpc, true),
+			Err(e) => (
+				ServerJsonRpcMessage::error(ErrorData::internal_error(e.to_string(), None), id.clone()),
+				false,
+			),
+		};
+		map_msg(&mut msg);
+		if capture_terminal_for_msg
+			&& !captured_terminal
+			&& let Some(log) = mcp_log.as_ref()
+		{
+			captured_terminal = capture_terminal_mcp_payload(log, &request_id, &msg);
+		}
+		// TODO: is it ok to have no event_id here?
+		ServerSseMessage {
+			event_id: None,
+			message: Arc::new(msg),
+		}
+	});
+	Ok(mcp::session::sse_stream_response(stream, None))
 }
 
 pub fn setup_request_log(
@@ -843,17 +1069,6 @@ pub(crate) struct GuardrailsCtx {
 	pub backends: Vec<String>,
 	pub client: PolicyClient,
 	pub req_ctx: Arc<IncomingRequestContext>,
-}
-
-fn messages_to_response(
-	id: RequestId,
-	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
-	mcp_log: Option<AsyncLog<MCPInfo>>,
-) -> Result<Response, UpstreamError> {
-	Ok(mcp::session::sse_stream_response(
-		into_sse_stream(id, stream, mcp_log),
-		None,
-	))
 }
 
 fn wrap_with_guardrails(

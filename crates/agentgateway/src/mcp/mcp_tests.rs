@@ -1811,6 +1811,39 @@ mod mockserver {
 				init_counter.to_string(),
 			)]))
 		}
+
+		/// Returns a result whose `_meta.ui.resourceUri` points at an MCP App resource.
+		/// Mirrors the MCP Apps spec pattern where tool calls dynamically reference a
+		/// `ui://...` resource the host then loads via `resources/read`.
+		#[tool(description = "Render an MCP App view")]
+		fn render_app(&self) -> Result<CallToolResult, McpError> {
+			let mut result = CallToolResult::success(vec![Content::text("rendered")]);
+			let mut meta = Meta::new();
+			meta.insert(
+				"ui".into(),
+				serde_json::json!({ "resourceUri": "ui://app/page.html" }),
+			);
+			// Mirrors `registerAppTool` dual-key normalization (modern + deprecated flat key).
+			meta.insert(
+				"ui/resourceUri".into(),
+				serde_json::json!("ui://app/page.html"),
+			);
+			result.meta = Some(meta);
+			Ok(result)
+		}
+
+		/// Returns an MCP App reference via `EmbeddedResource` content (A2UI sample wire form).
+		#[tool(description = "Render an MCP App via embedded resource")]
+		fn render_app_embedded(&self) -> Result<CallToolResult, McpError> {
+			Ok(CallToolResult::success(vec![Content::resource(
+				ResourceContents::TextResourceContents {
+					uri: "ui://basic/app".to_string(),
+					mime_type: Some("text/html;profile=mcp-app".to_string()),
+					text: String::new(),
+					meta: None,
+				},
+			)]))
+		}
 	}
 
 	#[prompt_router]
@@ -1868,12 +1901,14 @@ mod mockserver {
 	#[prompt_handler]
 	impl ServerHandler for Counter {
 		fn get_info(&self) -> ServerInfo {
+			// `enable_tasks` plus subscribe/task handlers below are exercised only by `adobe_mcp_apps_integration` (needs `--features adobe`).
 			ServerInfo::new(
 				ServerCapabilities::builder()
 					.enable_prompts()
 					.enable_resources()
 					.enable_resources_subscribe()
 					.enable_tools()
+					.enable_tasks()
 					.build(),
 			)
 			.with_protocol_version(ProtocolVersion::V_2025_06_18)
@@ -1953,14 +1988,76 @@ mod mockserver {
 			_: RequestContext<RoleServer>,
 		) -> Result<(), McpError> {
 			match uri.as_str() {
-				"str:////Users/to/some/path/" | "memo://insights" => Ok(()),
-				_ => Err(McpError::resource_not_found(
-					"resource_not_found",
-					Some(json!({
-							"uri": uri
-					})),
+				"memo://insights" | "str:////Users/to/some/path/" => Ok(()),
+				other => Err(McpError::invalid_params(
+					format!("unsubscribe expected unwrapped upstream uri, got {other}"),
+					None,
 				)),
 			}
+		}
+
+		async fn list_tasks(
+			&self,
+			_request: Option<PaginatedRequestParams>,
+			_: RequestContext<RoleServer>,
+		) -> Result<ListTasksResult, McpError> {
+			let ts = "2020-01-01T00:00:00Z";
+			Ok(ListTasksResult::new(vec![Task::new(
+				"t1".into(),
+				TaskStatus::Working,
+				ts.into(),
+				ts.into(),
+			)]))
+		}
+
+		async fn get_task_info(
+			&self,
+			GetTaskInfoParams { task_id, .. }: GetTaskInfoParams,
+			_: RequestContext<RoleServer>,
+		) -> Result<GetTaskResult, McpError> {
+			if task_id != "t1" {
+				return Err(McpError::invalid_params(
+					format!("expected upstream task id t1, got {task_id}"),
+					None,
+				));
+			}
+			let ts = "2020-01-01T00:00:00Z";
+			Ok(GetTaskResult {
+				meta: None,
+				task: Task::new("t1".into(), TaskStatus::Working, ts.into(), ts.into()),
+			})
+		}
+
+		async fn get_task_result(
+			&self,
+			GetTaskResultParams { task_id, .. }: GetTaskResultParams,
+			_: RequestContext<RoleServer>,
+		) -> Result<GetTaskPayloadResult, McpError> {
+			if task_id != "t1" {
+				return Err(McpError::invalid_params(
+					format!("expected upstream task id t1, got {task_id}"),
+					None,
+				));
+			}
+			Ok(GetTaskPayloadResult::new(json!({"done": true})))
+		}
+
+		async fn cancel_task(
+			&self,
+			CancelTaskParams { task_id, .. }: CancelTaskParams,
+			_: RequestContext<RoleServer>,
+		) -> Result<CancelTaskResult, McpError> {
+			if task_id != "t1" {
+				return Err(McpError::invalid_params(
+					format!("expected upstream task id t1, got {task_id}"),
+					None,
+				));
+			}
+			let ts = "2020-01-01T00:00:00Z";
+			Ok(CancelTaskResult {
+				meta: None,
+				task: Task::new("t1".into(), TaskStatus::Cancelled, ts.into(), ts.into()),
+			})
 		}
 
 		async fn list_resource_templates(
@@ -4249,4 +4346,536 @@ async fn mcp_guardrails_mutated_resource_read_reaches_upstream() {
 		})
 		.expect("resource should return text");
 	assert!(text.contains("Business Intelligence Memo"));
+}
+
+#[cfg(feature = "adobe")]
+mod adobe_mcp_apps_integration {
+	use std::borrow::Cow;
+	use std::sync::Arc;
+
+	use agent_core::strng;
+	use rmcp::model::{
+		CancelTaskParams, CancelTaskRequest, ClientRequest, GetTaskInfoParams, GetTaskInfoRequest,
+		GetTaskResultParams, GetTaskResultRequest, Implementation, InitializeResult, JsonRpcRequest,
+		ListToolsResult, Meta, ProtocolVersion, ReadResourceRequestParams, RequestId,
+		ServerCapabilities, ServerResult, SubscribeRequestParams, TaskStatus, Tool,
+		UnsubscribeRequestParams,
+	};
+	use serde_json::json;
+
+	use super::*;
+
+	fn first_sse_data_json(body: &[u8]) -> serde_json::Value {
+		let text = std::str::from_utf8(body).expect("utf8 body");
+		for line in text.lines() {
+			let line = line.trim_end();
+			if let Some(payload) = line.strip_prefix("data:") {
+				let payload = payload.trim_start();
+				return serde_json::from_str(payload).expect("sse data json");
+			}
+		}
+		panic!("no data: line in SSE body: {text}");
+	}
+
+	#[test]
+	fn merge_tools_wraps_ui_resource_uri_in_tool_meta_when_multiplexing() {
+		let relay = Relay::new(
+			McpBackendGroup {
+				targets: vec![
+					fake_streamable_target("alpha", SocketAddr::from(([127, 0, 0, 1], 30201))),
+					fake_streamable_target("beta", SocketAddr::from(([127, 0, 0, 1], 30202))),
+				],
+				..Default::default()
+			},
+			empty_mcp_policies(),
+			PolicyClient {
+				inputs: setup_proxy_test("{}").unwrap().pi,
+			},
+		)
+		.unwrap();
+
+		let cel = crate::mcp::rbac::CelExecWrapper::new(
+			::http::Request::builder()
+				.uri("http://example.com/mcp")
+				.body(())
+				.unwrap(),
+		);
+		let merge = relay.merge_tools(cel);
+
+		let mut meta = Meta::new();
+		meta.insert("ui".into(), json!({ "resourceUri": "ui://x/app.html" }));
+		meta.insert("ui/resourceUri".into(), json!("ui://x/app.html"));
+
+		let mut tool = Tool::new(
+			Cow::Borrowed("t1"),
+			Cow::Borrowed(""),
+			Arc::new(serde_json::Map::new()),
+		);
+		tool.meta = Some(meta);
+
+		let streams: Vec<(Strng, ServerResult)> = vec![(
+			"alpha".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![tool],
+				next_cursor: None,
+				meta: None,
+			}),
+		)];
+
+		let out = merge(streams).unwrap();
+		let ServerResult::ListToolsResult(ltr) = out else {
+			panic!("expected ListToolsResult");
+		};
+		let m = ltr.tools[0].meta.as_ref().unwrap();
+		let uri = m["ui"]["resourceUri"].as_str().unwrap();
+		let leg = m["ui/resourceUri"].as_str().unwrap();
+		assert!(
+			uri.starts_with("ui://"),
+			"expected federated ui URI, got {uri}"
+		);
+		assert!(uri.contains("u="), "expected u= query in {uri}");
+		assert_eq!(
+			leg, uri,
+			"legacy flat key must match nested form after merge_tools"
+		);
+	}
+
+	#[test]
+	fn capability_cache_records_tasks_per_upstream_when_multiplexing() {
+		let relay = Relay::new(
+			McpBackendGroup {
+				targets: vec![
+					fake_streamable_target("with_tasks", SocketAddr::from(([127, 0, 0, 1], 30203))),
+					fake_streamable_target("no_tasks", SocketAddr::from(([127, 0, 0, 1], 30204))),
+				],
+				..Default::default()
+			},
+			empty_mcp_policies(),
+			PolicyClient {
+				inputs: setup_proxy_test("{}").unwrap().pi,
+			},
+		)
+		.unwrap();
+
+		let merge_fn = relay.merge_initialize(ProtocolVersion::V_2025_06_18, true);
+		let results: Vec<(Strng, ServerResult)> = vec![
+			(
+				"with_tasks".into(),
+				ServerResult::InitializeResult(
+					InitializeResult::new(
+						ServerCapabilities::builder()
+							.enable_tools()
+							.enable_tasks()
+							.build(),
+					)
+					.with_protocol_version(ProtocolVersion::V_2025_06_18)
+					.with_server_info(Implementation::new("a", "1")),
+				),
+			),
+			(
+				"no_tasks".into(),
+				ServerResult::InitializeResult(
+					InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
+						.with_protocol_version(ProtocolVersion::V_2025_06_18)
+						.with_server_info(Implementation::new("b", "1")),
+				),
+			),
+		];
+		let _ = merge_fn(results).unwrap();
+
+		let all = relay.all_target_names();
+		let task_targets = relay.capabilities.upstreams_with_tasks(&all);
+		assert!(task_targets.contains(&"with_tasks".to_string()));
+		assert!(!task_targets.contains(&"no_tasks".to_string()));
+	}
+
+	#[test]
+	fn merge_tasks_merge_fn_handles_no_upstream_results() {
+		let relay = Relay::new(
+			McpBackendGroup {
+				targets: vec![
+					fake_streamable_target("a", SocketAddr::from(([127, 0, 0, 1], 30205))),
+					fake_streamable_target("b", SocketAddr::from(([127, 0, 0, 1], 30206))),
+				],
+				..Default::default()
+			},
+			empty_mcp_policies(),
+			PolicyClient {
+				inputs: setup_proxy_test("{}").unwrap().pi,
+			},
+		)
+		.unwrap();
+
+		let cel = crate::mcp::rbac::CelExecWrapper::new(
+			::http::Request::builder()
+				.uri("http://example.com/mcp")
+				.body(())
+				.unwrap(),
+		);
+		let merge = relay.merge_tasks(cel);
+		let out = merge(vec![]).unwrap();
+		let ServerResult::ListTasksResult(ltr) = out else {
+			panic!("expected ListTasksResult");
+		};
+		assert!(ltr.tasks.is_empty());
+	}
+
+	#[tokio::test]
+	async fn send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse() {
+		let relay = Relay::new(
+			McpBackendGroup {
+				targets: vec![
+					fake_streamable_target("a", SocketAddr::from(([127, 0, 0, 1], 30210))),
+					fake_streamable_target("b", SocketAddr::from(([127, 0, 0, 1], 30211))),
+				],
+				..Default::default()
+			},
+			empty_mcp_policies(),
+			PolicyClient {
+				inputs: setup_proxy_test("{}").unwrap().pi,
+			},
+		)
+		.unwrap();
+		let cel = crate::mcp::rbac::CelExecWrapper::new(
+			::http::Request::builder()
+				.uri("http://example.com/mcp")
+				.body(())
+				.unwrap(),
+		);
+		let merge = relay.merge_tasks(cel);
+		let targets: Vec<String> = vec![];
+		let req = JsonRpcRequest::new(
+			RequestId::Number(99),
+			ClientRequest::ListTasksRequest(Default::default()),
+		);
+		let resp = relay
+			.send_fanout_to(
+				&targets,
+				req,
+				crate::mcp::upstream::IncomingRequestContext::empty(),
+				merge,
+			)
+			.await
+			.expect("empty fanout should not error");
+		let body = crate::http::read_resp_body(resp).await.unwrap();
+		let v = first_sse_data_json(&body);
+		let tasks = v["result"]["tasks"].as_array().expect("tasks array");
+		assert!(tasks.is_empty(), "expected empty task list, got {v}");
+	}
+
+	#[tokio::test]
+	async fn multiplex_read_resource_round_trips_federated_uri() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+				false,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+		let resources = client.list_resources(None).await.unwrap().resources;
+		let memo_res = resources
+			.iter()
+			.find(|r| r.uri.contains("memo://insights"))
+			.expect("multiplexed memo resource");
+		let read = client
+			.read_resource(ReadResourceRequestParams::new(memo_res.uri.clone()))
+			.await
+			.expect("read_resource");
+		let text = match &read.contents[0] {
+			rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.as_str(),
+			other => panic!("expected text resource, got {other:?}"),
+		};
+		assert!(
+			text.contains("Business Intelligence"),
+			"unexpected memo body: {text}"
+		);
+	}
+
+	#[tokio::test]
+	async fn multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+				false,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+		let resources = client.list_resources(None).await.unwrap().resources;
+		let memo_res = resources
+			.iter()
+			.find(|r| r.uri.contains("memo://insights"))
+			.expect("multiplexed memo resource");
+		client
+			.subscribe(SubscribeRequestParams::new(memo_res.uri.clone()))
+			.await
+			.expect("subscribe");
+		client
+			.unsubscribe(UnsubscribeRequestParams::new(memo_res.uri.clone()))
+			.await
+			.expect("unsubscribe");
+	}
+
+	#[tokio::test]
+	async fn multiplex_call_tool_wraps_ui_resource_uri_in_response_meta() {
+		// Without wrapping the call-tool response's `_meta.ui.resourceUri`, the host
+		// receives the upstream-native `ui://...` and a subsequent `resources/read`
+		// fails the multiplex parser with "missing 'u' query param". This regression
+		// test pins the wire form by asserting the response meta carries a federated
+		// `ui://...` URI that round-trips through `parse_resource_uri_mixed`.
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+				false,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+
+		let result = client
+			.call_tool(rmcp::model::CallToolRequestParams::new("a_render_app"))
+			.await
+			.expect("call_tool render_app");
+
+		let meta = result.meta.expect("CallToolResult must carry _meta");
+		let ui = meta
+			.get("ui")
+			.and_then(|v| v.as_object())
+			.expect("_meta.ui object");
+		let uri = ui
+			.get("resourceUri")
+			.and_then(|v| v.as_str())
+			.expect("_meta.ui.resourceUri string");
+		let legacy = meta["ui/resourceUri"]
+			.as_str()
+			.expect("_meta[\"ui/resourceUri\"] string (registerAppTool wire form)");
+
+		assert!(
+			uri.starts_with("ui://"),
+			"federated URI must keep `ui://` scheme (MCP Apps requirement); got {uri}"
+		);
+		assert_eq!(
+			legacy, uri,
+			"legacy flat key must match modern nested wrapping"
+		);
+		let (target, original) = crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(None, uri)
+			.expect("federated URI must parse back to (target, upstream uri)");
+		assert_eq!(target, "a");
+		assert_eq!(original, "ui://app/page.html");
+		let (t2, o2) = crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(None, legacy)
+			.expect("legacy key must multiplex-parse identically");
+		assert_eq!((t2, o2), (target.clone(), original.clone()));
+	}
+
+	#[tokio::test]
+	async fn multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content() {
+		// A2UI sample tools return `ui://...` via EmbeddedResource content blocks rather than
+		// `_meta.ui.resourceUri`. Without wrapping, federated `resources/read` fails multiplex parsing.
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+				false,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+
+		let result = client
+			.call_tool(rmcp::model::CallToolRequestParams::new(
+				"a_render_app_embedded",
+			))
+			.await
+			.expect("call_tool render_app_embedded");
+
+		let content = result.content.first().expect("embedded resource content");
+		let resource = content.as_resource().expect("resource content block");
+		let uri = match &resource.resource {
+			rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri.as_str(),
+			other => panic!("expected TextResourceContents, got {other:?}"),
+		};
+		assert!(
+			uri.starts_with("ui://"),
+			"federated URI must keep `ui://` scheme; got {uri}"
+		);
+		assert!(uri.contains("u="), "expected u= query in {uri}");
+		let (target, original) =
+			crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(None, uri)
+				.expect("federated URI must parse back to (target, upstream uri)");
+		assert_eq!(target, "a");
+		assert_eq!(original, "ui://basic/app");
+	}
+
+	#[tokio::test]
+	async fn multiplex_initialize_advertises_prompts_capability() {
+		// MCP Apps hosts (e.g. MCP Inspector) gate prompt UI on the server advertising
+		// the `prompts` capability. Since the gateway multiplexes prompt names via the
+		// `target_` prefix, prompts are safely federated and must be advertised even
+		// when fronting multiple upstreams.
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+				false,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+
+		let info = client.peer_info().expect("peer info available");
+		assert!(
+			info.capabilities.prompts.is_some(),
+			"federated gateway must advertise prompts capability; got {:?}",
+			info.capabilities
+		);
+		assert!(
+			info.capabilities.tools.is_some(),
+			"federated gateway must advertise tools capability"
+		);
+		assert!(
+			info.capabilities.resources.is_some(),
+			"federated gateway must advertise resources capability"
+		);
+	}
+
+	#[tokio::test]
+	async fn multiplex_initialize_advertises_full_tasks_capability() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+				false,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+
+		let info = client.peer_info().expect("peer info available");
+		let tasks = info
+			.capabilities
+			.tasks
+			.as_ref()
+			.expect("tasks capability advertised");
+		assert!(
+			tasks.list.is_some(),
+			"MCP Inspector gates Tasks UI on tasks.list; got {:?}",
+			info.capabilities.tasks
+		);
+		assert!(tasks.cancel.is_some());
+		assert!(
+			tasks
+				.requests
+				.as_ref()
+				.and_then(|r| r.tools.as_ref())
+				.and_then(|t| t.call.as_ref())
+				.is_some(),
+			"MCP Inspector expects tasks.requests.tools.call"
+		);
+	}
+
+	#[tokio::test]
+	async fn multiplex_tasks_merge_list_get_and_cancel_unwrap_ids() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+				false,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+		let list = client
+			.send_request(ClientRequest::ListTasksRequest(Default::default()))
+			.await
+			.unwrap();
+		let ServerResult::ListTasksResult(ltr) = list else {
+			panic!("expected ListTasksResult, got {list:?}");
+		};
+		let mut ids: Vec<String> = ltr.tasks.into_iter().map(|t| t.task_id).collect();
+		ids.sort();
+		assert_eq!(ids, vec!["a_t1".to_string(), "b_t1".to_string()]);
+
+		let info = client
+			.send_request(ClientRequest::GetTaskInfoRequest(GetTaskInfoRequest::new(
+				GetTaskInfoParams {
+					meta: None,
+					task_id: "a_t1".into(),
+				},
+			)))
+			.await
+			.unwrap();
+		let ServerResult::GetTaskResult(gtr) = info else {
+			panic!("expected GetTaskResult");
+		};
+		assert_eq!(gtr.task.task_id, "t1");
+
+		let cancel = client
+			.send_request(ClientRequest::CancelTaskRequest(CancelTaskRequest::new(
+				CancelTaskParams {
+					meta: None,
+					task_id: "b_t1".into(),
+				},
+			)))
+			.await
+			.unwrap();
+		match cancel {
+			ServerResult::CancelTaskResult(ctr) => {
+				assert_eq!(ctr.task.task_id, "t1");
+				assert_eq!(ctr.task.status, TaskStatus::Cancelled);
+			},
+			ServerResult::GetTaskResult(gtr) => {
+				// `CancelTaskResult` matches the same JSON shape as `GetTaskResult` (flattened task);
+				// serde may decode successful cancel responses as `GetTaskResult`.
+				assert_eq!(gtr.task.task_id, "t1");
+				assert_eq!(gtr.task.status, TaskStatus::Cancelled);
+			},
+			other => panic!("unexpected cancel response: {other:?}"),
+		}
+
+		let payload = client
+			.send_request(ClientRequest::GetTaskResultRequest(
+				GetTaskResultRequest::new(GetTaskResultParams {
+					meta: None,
+					task_id: "a_t1".into(),
+				}),
+			))
+			.await
+			.unwrap();
+		let ServerResult::CustomResult(custom) = payload else {
+			panic!("expected CustomResult for tasks/result payload, got {payload:?}");
+		};
+		assert_eq!(custom.0, json!({"done": true}));
+	}
 }

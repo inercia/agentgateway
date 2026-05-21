@@ -13,6 +13,7 @@ use headers::HeaderMapExt;
 use rmcp::model::{
 	ClientInfo, ClientJsonRpcMessage, ClientNotification, ClientRequest, ConstString, Implementation,
 	InitializeRequest, JsonRpcRequest, ProtocolVersion, Reference, RequestId, ServerJsonRpcMessage,
+	ServerResult,
 };
 use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
 use sse_stream::{KeepAlive, Sse, SseBody, SseStream};
@@ -166,6 +167,7 @@ impl Session {
 		Ok((service_name, prompt))
 	}
 
+	#[cfg(not(feature = "adobe"))]
 	fn authorize_resource_request(
 		&self,
 		service_name: &str,
@@ -222,6 +224,172 @@ impl Session {
 				resource_name: resource_name.to_string(),
 			})
 		}
+	}
+
+	fn authorize_federated_resource_uri(
+		&self,
+		uri: &str,
+		method: &str,
+		span: &mut SpanWriteOnDrop,
+		log: &AsyncLog<mcp::MCPInfo>,
+		cel: &rbac::CelExecWrapper,
+	) -> Result<(String, String), UpstreamError> {
+		let (target_name, original_uri) = self.relay.parse_resource_uri(uri)?;
+		span.rename_span(format!("{method} {target_name}"));
+		log.non_atomic_mutate(|l| {
+			l.set_resource(target_name.clone(), original_uri.clone());
+		});
+		if !self.relay.policies.validate(
+			&rbac::ResourceType::Resource(rbac::ResourceId::new(
+				target_name.clone(),
+				original_uri.clone(),
+			)),
+			cel,
+		) {
+			return Err(UpstreamError::Authorization {
+				resource_type: "resource".to_string(),
+				resource_name: uri.to_string(),
+			});
+		}
+		Ok((target_name, original_uri))
+	}
+
+	#[cfg(feature = "adobe")]
+	fn authorize_multiplex_task_id(
+		&self,
+		task_id: &str,
+		method: &str,
+		span: &mut SpanWriteOnDrop,
+		log: &AsyncLog<mcp::MCPInfo>,
+		cel: &rbac::CelExecWrapper,
+	) -> Result<(String, String), UpstreamError> {
+		let (target_name, original_id) = self
+			.relay
+			.parse_task_id(task_id)
+			.map_err(|e| UpstreamError::InvalidRequest(format!("invalid task id: {task_id}: {e}")))?;
+		span.rename_span(format!("{method} {target_name}"));
+		log.non_atomic_mutate(|l| {
+			l.set_task(target_name.clone(), original_id.clone());
+		});
+		if !self.relay.policies.validate(
+			&rbac::ResourceType::Task(rbac::ResourceId::new(
+				target_name.clone(),
+				original_id.clone(),
+			)),
+			cel,
+		) {
+			return Err(UpstreamError::Authorization {
+				resource_type: "task".to_string(),
+				resource_name: task_id.to_string(),
+			});
+		}
+		Ok((target_name, original_id))
+	}
+
+	async fn handle_read_resource_request(
+		&self,
+		mut r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		method: &str,
+		span: &mut SpanWriteOnDrop,
+		log: &AsyncLog<mcp::MCPInfo>,
+		cel: &rbac::CelExecWrapper,
+	) -> Result<Response, UpstreamError> {
+		let ClientRequest::ReadResourceRequest(rrr) = &mut r.request else {
+			return Err(UpstreamError::InvalidRequest(
+				"internal: expected ReadResourceRequest".to_string(),
+			));
+		};
+		let uri = rrr.params.uri.clone();
+		let (target_name, original_uri) =
+			self.authorize_federated_resource_uri(&uri, method, span, log, cel)?;
+		rrr.params.uri = original_uri;
+		let default_mux = self.relay.default_target_name();
+		let tn_for_map = target_name.clone();
+		self
+			.relay
+			.send_single_map_response(
+				r,
+				ctx,
+				target_name.as_str(),
+				move |msg| {
+					if let ServerJsonRpcMessage::Response(jr) = msg
+						&& let ServerResult::ReadResourceResult(rr) = &mut jr.result
+					{
+						crate::mcp::mcp_apps::routing::rewrap_read_resource_contents(
+							default_mux.as_ref(),
+							tn_for_map.as_str(),
+							&mut rr.contents,
+						);
+					}
+				},
+				None,
+			)
+			.await
+	}
+
+	async fn handle_list_tools(
+		&self,
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		cel: rbac::CelExecWrapper,
+	) -> Result<Response, UpstreamError> {
+		let targets = self
+			.relay
+			.capabilities
+			.upstreams_with_tools(&self.relay.all_target_names());
+		self
+			.relay
+			.send_fanout_to(&targets, r, ctx, self.relay.merge_tools(cel))
+			.await
+	}
+
+	async fn handle_list_prompts(
+		&self,
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		cel: rbac::CelExecWrapper,
+	) -> Result<Response, UpstreamError> {
+		let targets = self
+			.relay
+			.capabilities
+			.upstreams_with_prompts(&self.relay.all_target_names());
+		self
+			.relay
+			.send_fanout_to(&targets, r, ctx, self.relay.merge_prompts(cel))
+			.await
+	}
+
+	async fn handle_list_resources(
+		&self,
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		cel: rbac::CelExecWrapper,
+	) -> Result<Response, UpstreamError> {
+		let targets = self
+			.relay
+			.capabilities
+			.upstreams_with_resources(&self.relay.all_target_names());
+		self
+			.relay
+			.send_fanout_to(&targets, r, ctx, self.relay.merge_resources(cel))
+			.await
+	}
+
+	async fn handle_list_resource_templates(
+		&self,
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		cel: rbac::CelExecWrapper,
+	) -> Result<Response, UpstreamError> {
+		let targets = self
+			.relay
+			.capabilities
+			.upstreams_with_resources(&self.relay.all_target_names());
+		self
+			.relay
+			.send_fanout_to(&targets, r, ctx, self.relay.merge_resource_templates(cel))
+			.await
 	}
 
 	/// delete any active sessions
@@ -418,12 +586,7 @@ impl Session {
 						}
 						res
 					},
-					ClientRequest::ListToolsRequest(_) => {
-						self
-							.relay
-							.send_fanout(r, ctx, self.relay.merge_tools())
-							.await
-					},
+					ClientRequest::ListToolsRequest(_) => self.handle_list_tools(r, ctx, cel).await,
 					// TODO(keithmattix): should we forward pings or should we do our own independent pings
 					// as heuristic for the connection pool (and handle client pings as a local reply from agentgateway)?
 					ClientRequest::PingRequest(_) | ClientRequest::SetLevelRequest(_) => {
@@ -432,23 +595,10 @@ impl Session {
 							.send_fanout(r, ctx, self.relay.merge_empty())
 							.await
 					},
-					ClientRequest::ListPromptsRequest(_) => {
-						self
-							.relay
-							.send_fanout(r, ctx, self.relay.merge_prompts())
-							.await
-					},
-					ClientRequest::ListResourcesRequest(_) => {
-						self
-							.relay
-							.send_fanout(r, ctx, self.relay.merge_resources())
-							.await
-					},
+					ClientRequest::ListPromptsRequest(_) => self.handle_list_prompts(r, ctx, cel).await,
+					ClientRequest::ListResourcesRequest(_) => self.handle_list_resources(r, ctx, cel).await,
 					ClientRequest::ListResourceTemplatesRequest(_) => {
-						self
-							.relay
-							.send_fanout(r, ctx, self.relay.merge_resource_templates())
-							.await
+						self.handle_list_resource_templates(r, ctx, cel).await
 					},
 					ClientRequest::CallToolRequest(ctr) => {
 						let name = ctr.params.name.clone();
@@ -461,6 +611,15 @@ impl Session {
 						});
 						let tn = tool.to_string();
 						ctr.params.name = tn.into();
+
+						// Per MCP Apps spec, tool call results may carry `_meta.ui.resourceUri`
+						// pointing at a `ui://...` resource the host renders. When multiplexing,
+						// that URI must be wrapped to the federated form so the host's follow-up
+						// `resources/read` resolves to the correct upstream target. Without this,
+						// upstream-native `ui://` URIs reach `parse_resource_uri_mixed` raw and
+						// fail with "multiplex URI missing 'u' query param".
+						let default_mux = self.relay.default_target_name();
+						let target_for_map = service_name.to_string();
 						self
 							.authorize_with_ctx(
 								service_name,
@@ -477,7 +636,28 @@ impl Session {
 							.await?;
 						self
 							.relay
-							.send_single(r, ctx, service_name, Some(log.clone()))
+							.send_single_map_response(
+								r,
+								ctx,
+								service_name,
+								move |msg| {
+									if let ServerJsonRpcMessage::Response(jr) = msg
+										&& let ServerResult::CallToolResult(result) = &mut jr.result
+									{
+										crate::mcp::mcp_apps::routing::rewrite_tool_ui_meta(
+											default_mux.as_ref(),
+											target_for_map.as_str(),
+											&mut result.meta,
+										);
+										crate::mcp::mcp_apps::routing::rewrap_call_tool_result_content(
+											default_mux.as_ref(),
+											target_for_map.as_str(),
+											&mut result.content,
+										);
+									}
+								},
+								Some(log.clone()),
+							)
 							.await
 					},
 					ClientRequest::GetPromptRequest(gpr) => {
@@ -504,65 +684,171 @@ impl Session {
 							.await?;
 						self.relay.send_single(r, ctx, service_name, None).await
 					},
-					ClientRequest::ReadResourceRequest(rrr) => {
-						let uri = rrr.params.uri.clone();
-						let (service_name, original_uri) = self.relay.parse_resource_uri(&uri)?;
-						span.rename_span(format!("{method} {service_name}"));
-						log.non_atomic_mutate(|l| {
-							l.set_resource(service_name.to_string(), original_uri.to_string());
-						});
-						rrr.params.uri = original_uri.clone();
+					ClientRequest::ReadResourceRequest(_) => {
 						self
-							.authorize_with_ctx(
-								service_name,
-								mcp::guardrails::methods::RESOURCES_READ,
-								&mut rrr.params,
-								&mut ctx,
-								rbac::ResourceType::Resource(rbac::ResourceId::new(
-									service_name.to_string(),
-									original_uri,
-								)),
-								"resource",
-								&uri,
-							)
-							.await?;
-						self.relay.send_single(r, ctx, service_name, None).await
+							.handle_read_resource_request(r, ctx, &method, &mut span, &log, &cel)
+							.await
 					},
+					#[cfg(not(feature = "adobe"))]
 					ClientRequest::SubscribeRequest(sr) => {
-						let uri = sr.params.uri.clone();
-						let (service_name, original_uri) = self.relay.parse_resource_uri(&uri)?;
-						self.authorize_resource_request(
-							service_name,
-							&original_uri,
-							&method,
-							&mut span,
-							&log,
-							&cel,
-						)?;
-						sr.params.uri = original_uri;
-						self.relay.send_single(r, ctx, service_name, None).await
+						if let Some(service_name) = self.relay.default_target_name() {
+							let uri = sr.params.uri.clone();
+							self.authorize_resource_request(
+								&service_name,
+								&uri,
+								&method,
+								&mut span,
+								&log,
+								&cel,
+							)?;
+							self
+								.relay
+								.send_single(r, ctx, service_name.as_str(), None)
+								.await
+						} else {
+							// TODO(https://github.com/agentgateway/agentgateway/issues/404)
+							// Find a mapping of URL
+							Err(UpstreamError::InvalidMethodWithMultiplexing(
+								r.request.method().to_string(),
+							))
+						}
 					},
+					#[cfg(not(feature = "adobe"))]
 					ClientRequest::UnsubscribeRequest(ur) => {
-						let uri = ur.params.uri.clone();
-						let (service_name, original_uri) = self.relay.parse_resource_uri(&uri)?;
-						self.authorize_resource_request(
-							service_name,
-							&original_uri,
-							&method,
-							&mut span,
-							&log,
-							&cel,
-						)?;
-						ur.params.uri = original_uri;
-						self.relay.send_single(r, ctx, service_name, None).await
+						if let Some(service_name) = self.relay.default_target_name() {
+							let uri = ur.params.uri.clone();
+							self.authorize_resource_request(
+								&service_name,
+								&uri,
+								&method,
+								&mut span,
+								&log,
+								&cel,
+							)?;
+							self
+								.relay
+								.send_single(r, ctx, service_name.as_str(), None)
+								.await
+						} else {
+							// TODO(https://github.com/agentgateway/agentgateway/issues/404)
+							// Find a mapping of URL
+							Err(UpstreamError::InvalidMethodWithMultiplexing(
+								r.request.method().to_string(),
+							))
+						}
 					},
 
+					#[cfg(feature = "adobe")]
+					ClientRequest::SubscribeRequest(srr) => {
+						let uri = srr.params.uri.clone();
+						let (target_name, original_uri) =
+							self.authorize_federated_resource_uri(&uri, &method, &mut span, &log, &cel)?;
+						srr.params.uri = original_uri;
+						let default_mux = self.relay.default_target_name();
+						let tn = target_name.clone();
+						self
+							.relay
+							.send_single_map_response(
+								r,
+								ctx,
+								target_name.as_str(),
+								move |msg| {
+									crate::mcp::mcp_apps::routing::rewrap_outbound_multiplex_server_message(
+										default_mux.as_ref(),
+										tn.as_str(),
+										msg,
+									);
+								},
+								None,
+							)
+							.await
+					},
+
+					#[cfg(feature = "adobe")]
+					ClientRequest::UnsubscribeRequest(urr) => {
+						let uri = urr.params.uri.clone();
+						let (target_name, original_uri) =
+							self.authorize_federated_resource_uri(&uri, &method, &mut span, &log, &cel)?;
+						urr.params.uri = original_uri;
+						let default_mux = self.relay.default_target_name();
+						let tn = target_name.clone();
+						self
+							.relay
+							.send_single_map_response(
+								r,
+								ctx,
+								target_name.as_str(),
+								move |msg| {
+									crate::mcp::mcp_apps::routing::rewrap_outbound_multiplex_server_message(
+										default_mux.as_ref(),
+										tn.as_str(),
+										msg,
+									);
+								},
+								None,
+							)
+							.await
+					},
+
+					#[cfg(feature = "adobe")]
+					ClientRequest::ListTasksRequest(_) => {
+						let targets = self
+							.relay
+							.capabilities
+							.upstreams_with_tasks(&self.relay.all_target_names());
+						self
+							.relay
+							.send_fanout_to(&targets, r, ctx, self.relay.merge_tasks(cel))
+							.await
+					},
+
+					#[cfg(feature = "adobe")]
+					ClientRequest::GetTaskInfoRequest(gtr) => {
+						let task_id = gtr.params.task_id.clone();
+						let (target_name, original_id) =
+							self.authorize_multiplex_task_id(&task_id, &method, &mut span, &log, &cel)?;
+						gtr.params.task_id = original_id;
+						self
+							.relay
+							.send_single(r, ctx, target_name.as_str(), None)
+							.await
+					},
+
+					#[cfg(feature = "adobe")]
+					ClientRequest::GetTaskResultRequest(gtr) => {
+						let task_id = gtr.params.task_id.clone();
+						let (target_name, original_id) =
+							self.authorize_multiplex_task_id(&task_id, &method, &mut span, &log, &cel)?;
+						gtr.params.task_id = original_id;
+						self
+							.relay
+							.send_single(r, ctx, target_name.as_str(), None)
+							.await
+					},
+
+					#[cfg(feature = "adobe")]
+					ClientRequest::CancelTaskRequest(ctr) => {
+						let task_id = ctr.params.task_id.clone();
+						let (target_name, original_id) =
+							self.authorize_multiplex_task_id(&task_id, &method, &mut span, &log, &cel)?;
+						ctr.params.task_id = original_id;
+						self
+							.relay
+							.send_single(r, ctx, target_name.as_str(), None)
+							.await
+					},
+
+					#[cfg(feature = "adobe")]
+					ClientRequest::CustomRequest(_) => {
+						Err(UpstreamError::InvalidMethod(r.request.method().to_string()))
+					},
+
+					#[cfg(not(feature = "adobe"))]
 					ClientRequest::ListTasksRequest(_)
 					| ClientRequest::GetTaskInfoRequest(_)
 					| ClientRequest::GetTaskResultRequest(_)
 					| ClientRequest::CancelTaskRequest(_)
 					| ClientRequest::CustomRequest(_) => {
-						// TODO(https://github.com/agentgateway/agentgateway/issues/404)
 						Err(UpstreamError::InvalidMethod(r.request.method().to_string()))
 					},
 					ClientRequest::CompleteRequest(cr) => match &cr.params.r#ref {
@@ -575,17 +861,14 @@ impl Session {
 						},
 						Reference::Resource(resource) => {
 							let uri = resource.uri.clone();
-							let (service_name, original_uri) = self.relay.parse_resource_uri(&uri)?;
-							self.authorize_resource_request(
-								service_name,
-								&original_uri,
-								&method,
-								&mut span,
-								&log,
-								&cel,
-							)?;
-							cr.params.r#ref = Reference::for_resource(original_uri);
-							self.relay.send_single(r, ctx, service_name, None).await
+							let (target_name, original_uri) =
+								self.authorize_federated_resource_uri(&uri, &method, &mut span, &log, &cel)?;
+							cr.params.r#ref =
+								Reference::Resource(rmcp::model::ResourceReference { uri: original_uri });
+							self
+								.relay
+								.send_single(r, ctx, target_name.as_str(), None)
+								.await
 						},
 					},
 				}

@@ -21,3 +21,14 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 ## 1.0.1
 
 - Vendor the upstream sync skill into `.claude/skills/agentgateway-sync` (`SKILL.md`, `references/`, `scripts/`, `.claude/settings.json` allowlists). See git log for per-change detail.
+
+## 1.1.0
+
+- MCP Apps: multiplexed resources, resource templates, tasks, subscribe/unsubscribe, completions, capability cache, and `ui://` URI wrapping for MCP App resources/tools (`#[cfg(feature = "adobe")]`).
+- Add `mcp.task` to MCPInfo CEL surface (regenerate `schema/cel.json` / related docs with `make generate-schema` or `cargo xtask schema`).
+- Advertise `prompts` capability when multiplexing federated upstreams; the gateway already namespaces prompt names via `target_` so hosts like MCP Inspector can now discover federated prompts.
+- Wrap `_meta.ui.resourceUri` in `tools/call` responses so MCP Apps tools that return a dynamic UI resource URI round-trip through `resources/read` (previously they reached the multiplex parser raw and failed with `multiplex URI missing 'u' query param`).
+- Also wrap `CallToolResult.content` EmbeddedResource URIs (A2UI sample wire form: `get_basic_app` / `get_editor_app` return `ui://...` in content blocks, not only in `_meta`).
+- Also wrap the legacy flat `_meta["ui/resourceUri"]` field alongside nested `_meta.ui.resourceUri` (`registerAppTool` populates both; hosts that read the legacy key no longer hit raw multiplex `resources/read`).
+- Advertise a full TasksCapability for merged initialize (list, cancel, requests.tools.call) instead of `{}` under `tasks`, so MCP Inspector enables Tasks when multiplexing (rmcp `TasksCapability::server_default()`).
+- Build pipeline: rename `adobe/Makefile`'s Docker build-arg from `CARGO_BUILD_FEATURES` to `CARGO_FEATURES` so it matches `Dockerfile`'s `ARG CARGO_FEATURES`; also switch the default features to the package-qualified form `agentgateway/ui,agentgateway/adobe`. Prior builds silently produced binaries without the `adobe` feature because Docker drops undeclared build-args, which stripped every `#[cfg(feature = "adobe")]` block (including the MCP Apps wiring above) at compile time.

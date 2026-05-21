@@ -1,7 +1,9 @@
 pub(crate) mod auth;
 pub(crate) mod guardrails;
 mod handler;
+mod mcp_apps;
 mod mergestream;
+pub(crate) mod multiplex_naming;
 mod rbac;
 mod router;
 mod session;
@@ -130,6 +132,7 @@ pub enum MCPOperation {
 	Prompt,
 	Resource,
 	ResourceTemplates,
+	Task,
 }
 
 impl EncodeLabelValue for MCPOperation {
@@ -145,6 +148,7 @@ impl Display for MCPOperation {
 			MCPOperation::Prompt => write!(f, "prompt"),
 			MCPOperation::Resource => write!(f, "resource"),
 			MCPOperation::ResourceTemplates => write!(f, "templates"),
+			MCPOperation::Task => write!(f, "task"),
 		}
 	}
 }
@@ -184,6 +188,9 @@ pub struct MCPInfo {
 	pub prompt: Option<ResourceId>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub resource: Option<ResourceId>,
+	/// Present for MCP task operations on the federated wire form.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub task: Option<ResourceId>,
 }
 
 impl MCPInfo {
@@ -193,6 +200,7 @@ impl MCPInfo {
 			&& self.tool.is_none()
 			&& self.prompt.is_none()
 			&& self.resource.is_none()
+			&& self.task.is_none()
 	}
 
 	pub fn resource_type(&self) -> Option<MCPOperation> {
@@ -203,7 +211,7 @@ impl MCPInfo {
 		} else if self.resource.is_some() {
 			Some(MCPOperation::Resource)
 		} else {
-			None
+			self.task.as_ref().map(|_| MCPOperation::Task)
 		}
 	}
 
@@ -214,6 +222,7 @@ impl MCPInfo {
 			.map(|tool| tool.target.as_str())
 			.or_else(|| self.prompt.as_ref().map(ResourceId::target))
 			.or_else(|| self.resource.as_ref().map(ResourceId::target))
+			.or_else(|| self.task.as_ref().map(ResourceId::target))
 	}
 
 	pub fn resource_name(&self) -> Option<&str> {
@@ -223,11 +232,13 @@ impl MCPInfo {
 			.map(|tool| tool.name.as_str())
 			.or_else(|| self.prompt.as_ref().map(ResourceId::name))
 			.or_else(|| self.resource.as_ref().map(ResourceId::name))
+			.or_else(|| self.task.as_ref().map(ResourceId::name))
 	}
 
 	pub fn set_tool(&mut self, target: String, name: String) {
 		self.prompt = None;
 		self.resource = None;
+		self.task = None;
 		match self.tool.as_mut() {
 			Some(tool) => {
 				tool.target = target;
@@ -246,13 +257,22 @@ impl MCPInfo {
 	pub fn set_prompt(&mut self, target: String, name: String) {
 		self.tool = None;
 		self.resource = None;
+		self.task = None;
 		self.prompt = Some(ResourceId::new(target, name));
 	}
 
 	pub fn set_resource(&mut self, target: String, name: String) {
 		self.tool = None;
 		self.prompt = None;
+		self.task = None;
 		self.resource = Some(ResourceId::new(target, name));
+	}
+
+	pub fn set_task(&mut self, target: String, task_id: String) {
+		self.tool = None;
+		self.prompt = None;
+		self.resource = None;
+		self.task = Some(ResourceId::new(target, task_id));
 	}
 
 	pub fn capture_call_arguments(
@@ -298,6 +318,58 @@ impl From<&ResourceType> for MCPInfo {
 				resource: Some(resource.clone()),
 				..Default::default()
 			},
+			ResourceType::Task(task) => Self {
+				task: Some(task.clone()),
+				..Default::default()
+			},
 		}
+	}
+}
+
+#[cfg(test)]
+mod mcp_info_semantics_tests {
+	use super::{MCPInfo, MCPOperation, ResourceId, ResourceType};
+
+	#[test]
+	fn mcpinfo_default_is_empty() {
+		assert!(MCPInfo::default().is_empty());
+	}
+
+	#[test]
+	fn mcpinfo_set_task_marks_non_empty_and_clears_others() {
+		let mut m = MCPInfo::default();
+		m.set_tool("x".into(), "tool1".into());
+		m.set_task("a".into(), "t1".into());
+		assert!(m.tool.is_none());
+		assert!(m.prompt.is_none());
+		assert!(m.resource.is_none());
+		assert_eq!(m.task, Some(ResourceId::new("a".into(), "t1".into())));
+		assert!(!m.is_empty());
+	}
+
+	#[test]
+	fn mcpinfo_task_operation_target_and_name() {
+		let mut m = MCPInfo::default();
+		m.set_task("a".into(), "t1".into());
+		assert_eq!(m.resource_type(), Some(MCPOperation::Task));
+		assert_eq!(m.target_name(), Some("a"));
+		assert_eq!(m.resource_name(), Some("t1"));
+	}
+
+	#[test]
+	fn mcpinfo_from_resource_type_task() {
+		let rid = ResourceId::new("a".into(), "t1".into());
+		let rt = ResourceType::Task(rid.clone());
+		let info = MCPInfo::from(&rt);
+		assert_eq!(info.task, Some(rid));
+		assert!(info.tool.is_none());
+		assert!(info.prompt.is_none());
+		assert!(info.resource.is_none());
+		assert!(!info.is_empty());
+	}
+
+	#[test]
+	fn mcpoperation_task_display_is_task() {
+		assert_eq!(format!("{}", MCPOperation::Task), "task");
 	}
 }
