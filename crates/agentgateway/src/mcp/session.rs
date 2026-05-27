@@ -12,9 +12,11 @@ use futures_util::StreamExt;
 use headers::HeaderMapExt;
 use rmcp::model::{
 	ClientInfo, ClientJsonRpcMessage, ClientNotification, ClientRequest, ConstString, Implementation,
-	InitializeRequest, JsonRpcRequest, ProtocolVersion, Reference, RequestId, ServerJsonRpcMessage,
-	ServerResult,
+	InitializeRequest, JsonRpcRequest, ProtocolVersion, Reference, RequestId, RootsCapabilities,
+	ServerJsonRpcMessage,
 };
+#[cfg(feature = "adobe")]
+use rmcp::model::ServerResult;
 use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
 use sse_stream::{KeepAlive, Sse, SseBody, SseStream};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -86,12 +88,21 @@ impl Session {
 						Some(ClientRequest::GetPromptRequest(gpr)) => gpr.params.name.clone(),
 						_ => unreachable!("match arm guarantees single-target request type"),
 					};
-					let (service_name, _) = match self.relay.parse_resource_name(&name) {
-						Ok(target) => target,
+					let resolved = match request_type {
+						Some(ClientRequest::CallToolRequest(_)) => {
+							self.relay.resolve_tool_call(name.as_str())
+						},
+						Some(ClientRequest::GetPromptRequest(_)) => {
+							self.relay.resolve_prompt_call(name.as_str())
+						},
+						_ => unreachable!("match arm guarantees single-target request type"),
+					};
+					let (service_name, _) = match resolved {
+						Ok(v) => v,
 						Err(err) => return Self::handle_error(req_id.clone(), Err(err)).await,
 					};
 					let res = self
-						.send_init_single(parts.clone(), init_request, service_name)
+						.send_init_single(parts.clone(), init_request, service_name.as_str())
 						.await;
 					if let Some(sessions) = self.relay.get_sessions() {
 						let s = http::sessionpersistence::SessionState::MCP(
@@ -106,7 +117,7 @@ impl Session {
 					let _ = Self::handle_error(
 						None,
 						self
-							.send_initialized_notification_single(parts.clone(), service_name)
+							.send_initialized_notification_single(parts.clone(), service_name.as_str())
 							.await,
 					)
 					.await?;
@@ -139,23 +150,23 @@ impl Session {
 		self
 	}
 
-	fn authorize_prompt_request<'a, 'b: 'a>(
-		&'a self,
-		name: &'b str,
+	fn authorize_prompt_request(
+		&self,
+		name: &str,
 		method: &str,
 		span: &mut SpanWriteOnDrop,
 		log: &AsyncLog<mcp::MCPInfo>,
 		cel: &rbac::CelExecWrapper,
-	) -> Result<(&'a str, &'b str), UpstreamError> {
-		let (service_name, prompt) = self.relay.parse_resource_name(name)?;
+	) -> Result<(String, String), UpstreamError> {
+		let (service_name, upstream_prompt) = self.relay.resolve_prompt_call(name)?;
 		span.rename_span(format!("{method} {service_name}"));
 		log.non_atomic_mutate(|l| {
-			l.set_prompt(service_name.to_string(), prompt.to_string());
+			l.set_prompt(service_name.clone(), upstream_prompt.clone());
 		});
 		if !self.relay.policies.validate(
 			&rbac::ResourceType::Prompt(rbac::ResourceId::new(
-				service_name.to_string(),
-				prompt.to_string(),
+				service_name.clone(),
+				upstream_prompt.clone(),
 			)),
 			cel,
 		) {
@@ -164,7 +175,7 @@ impl Session {
 				resource_name: name.to_string(),
 			});
 		}
-		Ok((service_name, prompt))
+		Ok((service_name, upstream_prompt))
 	}
 
 	#[cfg(not(feature = "adobe"))]
@@ -265,7 +276,7 @@ impl Session {
 	) -> Result<(String, String), UpstreamError> {
 		let (target_name, original_id) = self
 			.relay
-			.parse_task_id(task_id)
+			.resolve_task_call(task_id)
 			.map_err(|e| UpstreamError::InvalidRequest(format!("invalid task id: {task_id}: {e}")))?;
 		span.rename_span(format!("{method} {target_name}"));
 		log.non_atomic_mutate(|l| {
@@ -304,28 +315,38 @@ impl Session {
 		let (target_name, original_uri) =
 			self.authorize_federated_resource_uri(&uri, method, span, log, cel)?;
 		rrr.params.uri = original_uri;
-		let default_mux = self.relay.default_target_name();
-		let tn_for_map = target_name.clone();
-		self
-			.relay
-			.send_single_map_response(
-				r,
-				ctx,
-				target_name.as_str(),
-				move |msg| {
-					if let ServerJsonRpcMessage::Response(jr) = msg
-						&& let ServerResult::ReadResourceResult(rr) = &mut jr.result
-					{
-						crate::mcp::mcp_apps::routing::rewrap_read_resource_contents(
-							default_mux.as_ref(),
-							tn_for_map.as_str(),
-							&mut rr.contents,
-						);
-					}
-				},
-				None,
-			)
-			.await
+		#[cfg(feature = "adobe")]
+		{
+			let default_mux = self.relay.default_target_name();
+			let tn_for_map = target_name.clone();
+			return self
+				.relay
+				.send_single_map_response(
+					r,
+					ctx,
+					target_name.as_str(),
+					move |msg| {
+						if let ServerJsonRpcMessage::Response(jr) = msg
+							&& let ServerResult::ReadResourceResult(rr) = &mut jr.result
+						{
+							crate::mcp::mcp_apps::routing::rewrap_read_resource_contents(
+								default_mux.as_ref(),
+								tn_for_map.as_str(),
+								&mut rr.contents,
+							);
+						}
+					},
+					None,
+				)
+				.await;
+		}
+		#[cfg(not(feature = "adobe"))]
+		{
+			self
+				.relay
+				.send_single(r, ctx, target_name.as_str(), None)
+				.await
+		}
 	}
 
 	async fn handle_list_tools(
@@ -602,15 +623,14 @@ impl Session {
 					},
 					ClientRequest::CallToolRequest(ctr) => {
 						let name = ctr.params.name.clone();
-						let (service_name, tool) = self.relay.parse_resource_name(&name)?;
+						let (service_name, upstream_tool) = self.relay.resolve_tool_call(name.as_ref())?;
 						span.rename_span(format!("{method} {service_name}"));
 						let call_arguments = ctr.params.arguments.clone();
 						log.non_atomic_mutate(|l| {
-							l.set_tool(service_name.to_string(), tool.to_string());
+							l.set_tool(service_name.clone(), upstream_tool.clone());
 							l.capture_call_arguments(call_arguments);
 						});
-						let tn = tool.to_string();
-						ctr.params.name = tn.into();
+						ctr.params.name = upstream_tool.clone().into();
 
 						// Per MCP Apps spec, tool call results may carry `_meta.ui.resourceUri`
 						// pointing at a `ui://...` resource the host renders. When multiplexing,
@@ -622,13 +642,13 @@ impl Session {
 						let target_for_map = service_name.to_string();
 						self
 							.authorize_with_ctx(
-								service_name,
+								service_name.as_str(),
 								mcp::guardrails::methods::TOOLS_CALL,
 								&mut ctr.params,
 								&mut ctx,
 								rbac::ResourceType::Tool(rbac::ResourceId::new(
 									service_name.to_string(),
-									tool.to_string(),
+									upstream_tool.to_string(),
 								)),
 								"tool",
 								&name,
@@ -639,7 +659,7 @@ impl Session {
 							.send_single_map_response(
 								r,
 								ctx,
-								service_name,
+								service_name.as_str(),
 								move |msg| {
 									if let ServerJsonRpcMessage::Response(jr) = msg
 										&& let ServerResult::CallToolResult(result) = &mut jr.result
@@ -857,7 +877,7 @@ impl Session {
 							let (service_name, prompt_name) =
 								self.authorize_prompt_request(&name, &method, &mut span, &log, &cel)?;
 							cr.params.r#ref = Reference::for_prompt(prompt_name.to_string());
-							self.relay.send_single(r, ctx, service_name, None).await
+							self.relay.send_single(r, ctx, service_name.as_str(), None).await
 						},
 						Reference::Resource(resource) => {
 							let uri = resource.uri.clone();

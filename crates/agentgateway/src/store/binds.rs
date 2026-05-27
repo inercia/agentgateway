@@ -18,7 +18,7 @@ use crate::http::backendtls::BackendTLS;
 use crate::http::ext_proc::InferenceRouting;
 use crate::http::{ext_authz, ext_proc, filters, health, oidc, remoteratelimit, retry, timeout};
 use crate::llm::policy::ResponseGuard;
-use crate::mcp::McpAuthorizationSet;
+use crate::mcp::{McpAuthorizationSet, McpRewriteSet};
 use crate::proxy::dtrace;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::store::{BackendPolicy, PolicyExpressions, RequestPolicy};
@@ -229,6 +229,7 @@ pub struct BackendPolicies {
 	pub ext_authz: BackendPolicy<ext_authz::ExtAuthz>,
 
 	pub mcp_authorization: Option<McpAuthorizationSet>,
+	pub mcp_rewrite: Option<crate::mcp::McpRewritePolicy>,
 	pub mcp_authentication: Option<McpAuthentication>,
 	pub mcp_guardrails: Option<Arc<crate::mcp::guardrails::McpGuardrails>>,
 
@@ -252,6 +253,18 @@ pub struct BackendPolicies {
 	pub override_dest: Option<std::net::SocketAddr>,
 }
 
+fn merge_mcp_rewrite_policies(
+	federation: Option<crate::mcp::McpRewritePolicy>,
+	per_target: Option<crate::mcp::McpRewritePolicy>,
+) -> Option<crate::mcp::McpRewritePolicy> {
+	match (federation, per_target) {
+		(None, None) => None,
+		(Some(f), None) => Some(f),
+		(None, Some(t)) => Some(t),
+		(Some(f), Some(t)) => Some(McpRewriteSet::merge_for_target(Some(&f), Some(&t))),
+	}
+}
+
 impl BackendPolicies {
 	// Merges self and other. Other has precedence
 	pub fn merge(self, other: BackendPolicies) -> BackendPolicies {
@@ -263,6 +276,7 @@ impl BackendPolicies {
 			llm: other.llm.or(self.llm),
 			// TODO: is this right??
 			mcp_authorization: other.mcp_authorization.or(self.mcp_authorization),
+			mcp_rewrite: merge_mcp_rewrite_policies(self.mcp_rewrite, other.mcp_rewrite),
 			mcp_authentication: other.mcp_authentication.or(self.mcp_authentication),
 			mcp_guardrails: other.mcp_guardrails.or(self.mcp_guardrails),
 			inference_routing: other.inference_routing.or(self.inference_routing),
@@ -1094,6 +1108,7 @@ impl Store {
 			.chain(rules);
 
 		let mut mcp_authz = Vec::new();
+		let mut mcp_rewrites = Vec::new();
 		let mut pol = BackendPolicies::default();
 		for rule in rules {
 			match &rule {
@@ -1156,6 +1171,9 @@ impl Store {
 					// Authorization policies merge, unlike others
 					mcp_authz.push(p.clone().into_inner());
 				},
+				BackendTrafficPolicy::McpRewrite(p) => {
+					mcp_rewrites.push(p.clone());
+				},
 				BackendTrafficPolicy::McpAuthentication(p) => {
 					pol.mcp_authentication.get_or_insert_with(|| p.clone());
 				},
@@ -1166,6 +1184,9 @@ impl Store {
 		}
 		if !mcp_authz.is_empty() {
 			pol.mcp_authorization = Some(McpAuthorizationSet::new(mcp_authz.into()));
+		}
+		if let Some(merged) = McpRewriteSet::concat_policies(mcp_rewrites) {
+			pol.mcp_rewrite = Some(merged);
 		}
 		dtrace::trace(|t| {
 			let s = serde_json::to_value(&pol).unwrap_or_default();

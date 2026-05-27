@@ -3,5 +3,5 @@
 pub(crate) mod capabilities;
 pub(crate) mod routing;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "adobe"))]
 mod tests;

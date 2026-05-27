@@ -362,6 +362,23 @@ fn route_backend_reference_from_proto(
 	})
 }
 
+#[cfg(feature = "adobe")]
+fn mcp_rewrite_from_proto(
+	m: &proto::agent::backend_policy_spec::McpRewrite,
+	diagnostics: &mut Diagnostics,
+) -> crate::mcp::McpRewritePolicy {
+	crate::mcp::rewrite::mcp_rewrite_from_proto(m, diagnostics)
+}
+
+#[cfg(not(feature = "adobe"))]
+fn mcp_rewrite_from_proto(
+	m: &proto::agent::backend_policy_spec::McpRewrite,
+	diagnostics: &mut Diagnostics,
+) -> crate::mcp::McpRewritePolicy {
+	let _ = (m, diagnostics);
+	crate::mcp::McpRewritePolicy::default()
+}
+
 fn mcp_authorization_from_proto(
 	rbac: &proto::agent::backend_policy_spec::McpAuthorization,
 	diagnostics: &mut Diagnostics,
@@ -1736,6 +1753,9 @@ fn backend_policy_from_proto(
 		},
 		Some(bps::Kind::McpAuthorization(rbac)) => {
 			BackendTrafficPolicy::McpAuthorization(mcp_authorization_from_proto(rbac, diagnostics))
+		},
+		Some(bps::Kind::McpRewrite(mr)) => {
+			BackendTrafficPolicy::McpRewrite(mcp_rewrite_from_proto(mr, diagnostics))
 		},
 		Some(bps::Kind::McpAuthentication(ma)) => {
 			BackendTrafficPolicy::McpAuthentication(mcp_authentication_from_proto(ma, diagnostics)?)

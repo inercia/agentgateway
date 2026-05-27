@@ -27,6 +27,26 @@ pub fn parse_resource_name<'a, 'b: 'a>(
 	}
 }
 
+/// Parse federated `target+scheme://...` resource URIs (upstream multiplex form; no MCP Apps `ui://`).
+#[cfg(not(feature = "adobe"))]
+pub fn parse_multiplex_resource_uri(
+	default_target_name: Option<&String>,
+	uri: &str,
+) -> Result<(String, String), UpstreamError> {
+	if let Some(default) = default_target_name {
+		return Ok((default.clone(), uri.to_string()));
+	}
+	let (target, remainder) = uri.split_once('+').ok_or_else(|| {
+		UpstreamError::InvalidRequest("invalid multiplex resource URI (missing target)".to_string())
+	})?;
+	if !remainder.contains("://") {
+		return Err(UpstreamError::InvalidRequest(
+			"invalid multiplex resource URI (missing scheme)".to_string(),
+		));
+	}
+	Ok((target.to_string(), remainder.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
 	use super::parse_resource_name;
