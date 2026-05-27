@@ -1,6 +1,11 @@
 [alias]
 xtask = "run --package xtask --"
 
+# Local dev: rustc invokes sccache when installed (`brew install sccache`).
+# Set SCCACHE_DIR to a persistent path (e.g. ~/.cache/sccache); otherwise sccache uses a temp dir.
+[build]
+rustc-wrapper = "sccache"
+
 # Enable tokio_unstable for task dump
 # Not supported for non-linux
 [target.'cfg(target_os = "linux")']

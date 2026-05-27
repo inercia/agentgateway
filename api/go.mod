@@ -1,4 +1,4 @@
-module github.com/agentgateway/agentgateway/api
+module github.com/Adobe-Apis/agentgateway/api
 
 go 1.24.0
 

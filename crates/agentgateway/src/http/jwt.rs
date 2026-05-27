@@ -1,6 +1,7 @@
 // Inspired by https://github.com/cdriehuys/axum-jwks/blob/main/axum-jwks/src/jwks.rs (MIT license)
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
+#[cfg(feature = "adobe")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ::cel::types::dynamic::DynamicType;
@@ -585,23 +586,26 @@ impl Jwt {
 				TokenError::Invalid(error)
 			})?;
 
-		// If the token carries `created_at` and `expires_in` (millisecond values),
-		// treat them as an alternative expiration: reject when now >= created_at + expires_in.
-		if let (Some(created_at), Some(expires_in)) = (
-			claim_as_millis(&decoded_token.claims, "created_at"),
-			claim_as_millis(&decoded_token.claims, "expires_in"),
-		) {
-			let expiration_ms = created_at.saturating_add(expires_in);
-			let now_ms = SystemTime::now()
-				.duration_since(UNIX_EPOCH)
-				.expect("system clock before UNIX epoch")
-				.as_millis() as u64;
-			if now_ms >= expiration_ms {
-				debug!(
-					created_at,
-					expires_in, expiration_ms, now_ms, "Token expired based on created_at + expires_in"
-				);
-				return Err(TokenError::Expired);
+		// Adobe IMS: `created_at` + `expires_in` (millisecond values) as alternative expiration.
+		#[cfg(feature = "adobe")]
+		{
+			if let (Some(created_at), Some(expires_in)) = (
+				claim_as_millis(&decoded_token.claims, "created_at"),
+				claim_as_millis(&decoded_token.claims, "expires_in"),
+			) {
+				let expiration_ms = created_at.saturating_add(expires_in);
+				let now_ms = SystemTime::now()
+					.duration_since(UNIX_EPOCH)
+					.expect("system clock before UNIX epoch")
+					.as_millis() as u64;
+				if now_ms >= expiration_ms {
+					debug!(
+						created_at,
+						expires_in, expiration_ms, now_ms,
+						"Token expired based on created_at + expires_in"
+					);
+					return Err(TokenError::Expired);
+				}
 			}
 		}
 
@@ -613,8 +617,9 @@ impl Jwt {
 	}
 }
 
-/// Extract a claim value as a `u64` representing milliseconds.
+/// Extract a claim value as a `u64` representing milliseconds (Adobe IMS).
 /// Handles both JSON string (e.g. `"86400000"`) and JSON number (e.g. `86400000`) representations.
+#[cfg(feature = "adobe")]
 fn claim_as_millis(claims: &Map<String, Value>, key: &str) -> Option<u64> {
 	match claims.get(key)? {
 		Value::String(s) => s.parse::<u64>().ok(),

@@ -2477,6 +2477,7 @@ pub enum TrafficPolicy {
 #[serde(rename_all = "camelCase")]
 pub enum BackendTrafficPolicy {
 	McpAuthorization(McpAuthorization),
+	McpRewrite(crate::mcp::McpRewritePolicy),
 	McpAuthentication(McpAuthentication),
 	McpGuardrails(Arc<crate::mcp::guardrails::McpGuardrails>),
 	A2a(A2aPolicy),

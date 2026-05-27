@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use parking_lot::RwLock;
+
 use agent_core::version::BuildInfo;
 use futures_core::Stream;
 use http::StatusCode;
@@ -22,6 +24,14 @@ use crate::mcp;
 use crate::mcp::mergestream::{MergeFn, Messages};
 use crate::mcp::multiplex_naming;
 use crate::mcp::rbac::{CelExecWrapper, McpAuthorizationSet};
+use crate::mcp::rewrite::{
+	apply_prompt_rewrite, apply_resource_rewrite, apply_tool_rewrite, build_flat_tool_route_index,
+	filter_flat_prompt_collisions, filter_flat_resource_collisions,
+	filter_flat_resource_template_collisions, filter_flat_tool_collisions,
+	CompiledServerRewrite, McpRewriteSet, UpstreamInstructionsMode,
+};
+#[cfg(feature = "adobe")]
+use crate::mcp::rewrite::filter_flat_task_collisions;
 use crate::mcp::router::McpBackendGroup;
 use crate::mcp::streamablehttp::ServerSseMessage;
 use crate::mcp::upstream::{IncomingRequestContext, UpstreamError};
@@ -68,6 +78,7 @@ fn apply_multiplex_to_listed_resource(
 	default_target_name: Option<&String>,
 	server_name: &str,
 	mut r: rmcp::model::Resource,
+	flat: bool,
 ) -> rmcp::model::Resource {
 	#[cfg(feature = "adobe")]
 	{
@@ -76,11 +87,14 @@ fn apply_multiplex_to_listed_resource(
 			server_name,
 			&r.uri,
 		);
-		r.name = multiplex_naming::resource_name(default_target_name, server_name, &r.name);
+		if !flat {
+			r.name = multiplex_naming::resource_name(default_target_name, server_name, &r.name);
+		}
 		r
 	}
 	#[cfg(not(feature = "adobe"))]
 	{
+		let _ = flat;
 		r.uri = resource_uri(default_target_name, server_name, &r.uri);
 		r
 	}
@@ -89,22 +103,24 @@ fn apply_multiplex_to_listed_resource(
 fn apply_multiplex_to_resource_template(
 	default_target_name: Option<&String>,
 	server_name: &str,
-	rt: rmcp::model::ResourceTemplate,
+	mut rt: rmcp::model::ResourceTemplate,
+	flat: bool,
 ) -> rmcp::model::ResourceTemplate {
 	#[cfg(feature = "adobe")]
 	{
-		let mut rt = rt;
 		rt.uri_template = crate::mcp::mcp_apps::routing::wrap_resource_template_uri_mixed(
 			default_target_name,
 			server_name,
 			&rt.uri_template,
 		);
-		rt.name = multiplex_naming::resource_name(default_target_name, server_name, &rt.name);
+		if !flat {
+			rt.name = multiplex_naming::resource_name(default_target_name, server_name, &rt.name);
+		}
 		rt
 	}
 	#[cfg(not(feature = "adobe"))]
 	{
-		let _ = (default_target_name, server_name);
+		let _ = (default_target_name, server_name, flat);
 		rt
 	}
 }
@@ -115,7 +131,10 @@ pub struct Relay {
 	pub policies: McpAuthorizationSet,
 	pub(crate) mcp_guardrails: Option<Arc<crate::mcp::guardrails::McpGuardrails>>,
 	pub(crate) policy_client: PolicyClient,
+	pub mcp_rewrite: McpRewriteSet,
 	pub(crate) capabilities: Arc<crate::mcp::mcp_apps::capabilities::TargetCapabilities>,
+	/// Populated by federated `tools/list` when `resourceNaming: Flat`; used by `tools/call`.
+	flat_tool_routes: Arc<RwLock<HashMap<String, (String, String)>>>,
 }
 
 pub struct RelayInputs {
@@ -141,12 +160,20 @@ impl Relay {
 		policies: McpAuthorizationSet,
 		client: PolicyClient,
 	) -> Result<Self, mcp::Error> {
+		let mcp_rewrite = McpRewriteSet::from_backend_targets(backend.targets.iter().map(|t| {
+			(
+				t.name.to_string(),
+				t.backend_policies.mcp_rewrite.clone(),
+			)
+		}));
 		Ok(Self {
 			upstreams: Arc::new(upstream::UpstreamGroup::new(client.clone(), backend)?),
 			policies,
 			mcp_guardrails: None,
 			policy_client: client,
+			mcp_rewrite,
 			capabilities: Arc::new(crate::mcp::mcp_apps::capabilities::TargetCapabilities::new()),
+			flat_tool_routes: Arc::new(RwLock::new(HashMap::new())),
 		})
 	}
 	pub fn with_policies(&self, policies: McpAuthorizationSet) -> Self {
@@ -155,7 +182,9 @@ impl Relay {
 			policies,
 			mcp_guardrails: self.mcp_guardrails.clone(),
 			policy_client: self.policy_client.clone(),
+			mcp_rewrite: self.mcp_rewrite.clone(),
 			capabilities: self.capabilities.clone(),
+			flat_tool_routes: self.flat_tool_routes.clone(),
 		}
 	}
 
@@ -174,25 +203,68 @@ impl Relay {
 		multiplex_naming::parse_resource_name(self.upstreams.default_target_name.as_ref(), res)
 	}
 
-	/// Reverse of `resource_uri`: extracts the service name and original URI from a
-	/// multiplexed URI of the form `service+scheme://rest`.
-	pub fn parse_resource_uri<'a>(&'a self, uri: &str) -> Result<(&'a str, String), UpstreamError> {
-		if let Some(default) = self.upstreams.default_target_name.as_ref() {
-			Ok((default.as_str(), uri.to_string()))
-		} else {
-			// URI format: "service+scheme://rest"
-			let plus_pos = uri
-				.find('+')
-				.ok_or_else(|| UpstreamError::InvalidRequest("invalid resource URI".to_string()))?;
-			let service_name = &uri[..plus_pos];
-			let original_uri = &uri[plus_pos + 1..];
-			// Validate that the extracted service name corresponds to a known upstream
-			let validated_name = self
-				.upstreams
-				.get_name(service_name)
-				.ok_or_else(|| UpstreamError::InvalidRequest(format!("unknown service {service_name}")))?;
-			Ok((validated_name, original_uri.to_string()))
+	/// Resolve a client tool name to `(target, upstream_name)` for auth and upstream `tools/call`.
+	pub fn resolve_tool_call(
+		&self,
+		client_name: &str,
+	) -> Result<(String, String), UpstreamError> {
+		if self.mcp_rewrite.flat() {
+			let routes = self.flat_tool_routes.read();
+			return self.mcp_rewrite.resolve_flat_tool(
+				client_name,
+				Some(&routes),
+				&self.all_target_names(),
+			);
 		}
+		let (target, exposed) = self.parse_resource_name(client_name)?;
+		let upstream = self
+			.mcp_rewrite
+			.target(target)
+			.map(|t| t.resolve_upstream_tool(exposed))
+			.unwrap_or_else(|| exposed.to_string());
+		Ok((target.to_string(), upstream))
+	}
+
+	/// Resolve a client prompt name to `(target, upstream_name)`.
+	pub fn resolve_prompt_call(
+		&self,
+		client_name: &str,
+	) -> Result<(String, String), UpstreamError> {
+		if self.mcp_rewrite.flat() {
+			return self.mcp_rewrite.resolve_flat_prompt(client_name);
+		}
+		let (target, exposed) = self.parse_resource_name(client_name)?;
+		let upstream = self
+			.mcp_rewrite
+			.target(target)
+			.map(|t| t.resolve_upstream_prompt(exposed))
+			.unwrap_or_else(|| exposed.to_string());
+		Ok((target.to_string(), upstream))
+	}
+
+	/// Resolve a Flat-mode client task id to `(target, upstream_task_id)`.
+	#[cfg(feature = "adobe")]
+	pub fn resolve_task_call(
+		&self,
+		client_id: &str,
+	) -> Result<(String, String), UpstreamError> {
+		if self.mcp_rewrite.flat() {
+			let mut hits = Vec::new();
+			for (name, _) in self.upstreams.iter_named() {
+				hits.push((name.to_string(), client_id.to_string()));
+			}
+			return match hits.len() {
+				0 => Err(UpstreamError::InvalidRequest(format!(
+					"unknown flat task id: {client_id}"
+				))),
+				1 => Ok(hits.pop().unwrap()),
+				_ => Err(UpstreamError::InvalidRequest(format!(
+					"ambiguous flat task id: {client_id}"
+				))),
+			};
+		}
+		let (target, exposed) = self.parse_task_id(client_id)?;
+		Ok((target, exposed))
 	}
 
 	pub fn get_sessions(&self) -> Option<Vec<MCPSession>> {
@@ -345,18 +417,22 @@ impl Relay {
 
 	pub fn merge_tools(&self) -> Box<MergeFn> {
 		let policies = self.policies.clone();
+		let rewrite = self.mcp_rewrite.clone();
 		let default_target_name = self.upstreams.default_target_name.clone();
+		let flat = rewrite.flat();
+		let flat_tool_routes = self.flat_tool_routes.clone();
 		Box::new(move |streams, cel| {
-			let tools = streams
+			let mut route_entries = Vec::new();
+			let mut tools = streams
 				.into_iter()
 				.flat_map(|(server_name, s)| {
 					let tools = match s {
 						ServerResult::ListToolsResult(ltr) => ltr.tools,
 						_ => vec![],
 					};
+					let target_rules = rewrite.target(server_name.as_str());
 					tools
 						.into_iter()
-						// Apply authorization policies, filtering tools that are not allowed.
 						.filter(|t| {
 							policies.validate(
 								&rbac::ResourceType::Tool(rbac::ResourceId::new(
@@ -366,13 +442,28 @@ impl Relay {
 								cel,
 							)
 						})
-						// Rename to handle multiplexing
 						.map(|mut t| {
-							t.name = Cow::Owned(multiplex_naming::resource_name(
-								default_target_name.as_ref(),
-								server_name.as_str(),
-								&t.name,
-							));
+							let upstream_name = t.name.to_string();
+							if let Some(tr) = target_rules {
+								apply_tool_rewrite(&mut t, &tr.tools);
+							}
+							let exposed = if flat {
+								t.name.to_string()
+							} else {
+								multiplex_naming::resource_name(
+									default_target_name.as_ref(),
+									server_name.as_str(),
+									&t.name,
+								)
+							};
+							if flat {
+								route_entries.push((
+									server_name.to_string(),
+									upstream_name,
+									exposed.clone(),
+								));
+							}
+							t.name = Cow::Owned(exposed);
 							#[cfg(feature = "adobe")]
 							crate::mcp::mcp_apps::routing::rewrite_tool_ui_meta(
 								default_target_name.as_ref(),
@@ -384,6 +475,10 @@ impl Relay {
 						.collect_vec()
 				})
 				.collect_vec();
+			if flat {
+				*flat_tool_routes.write() = build_flat_tool_route_index(route_entries);
+				tools = filter_flat_tool_collisions(tools);
+			}
 			Ok(
 				ListToolsResult {
 					tools,
@@ -398,6 +493,7 @@ impl Relay {
 	pub fn merge_initialize(&self, pv: ProtocolVersion, multiplexing: bool) -> Box<MergeFn> {
 		let resource_subscribe = self.upstreams.stateful();
 		let capabilities = self.capabilities.clone();
+		let server = self.mcp_rewrite.server.clone();
 		Box::new(move |s, _cel| {
 			if !multiplexing {
 				// Happy case: we can forward everything
@@ -410,7 +506,7 @@ impl Relay {
 				}
 				// If we got here in FailOpen mode, it means the only target failed.
 				// Return a default info response to keep the client session alive.
-				return Ok(Self::get_info(pv, resource_subscribe, Vec::new()).into());
+				return Ok(Self::get_info(pv, resource_subscribe, Vec::new(), server.clone()).into());
 			}
 
 			// Multiplexing is more complex. We need to find the lowest protocol version
@@ -434,21 +530,24 @@ impl Relay {
 				}
 			}
 
-			Ok(Self::get_info(lowest_version, resource_subscribe, upstream_instructions).into())
+			Ok(Self::get_info(lowest_version, resource_subscribe, upstream_instructions, server.clone()).into())
 		})
 	}
 
 	pub fn merge_prompts(&self) -> Box<MergeFn> {
 		let policies = self.policies.clone();
+		let rewrite = self.mcp_rewrite.clone();
 		let default_target_name = self.upstreams.default_target_name.clone();
+		let flat = rewrite.flat();
 		Box::new(move |streams, cel| {
-			let prompts = streams
+			let mut prompts = streams
 				.into_iter()
 				.flat_map(|(server_name, s)| {
 					let prompts = match s {
 						ServerResult::ListPromptsResult(lpr) => lpr.prompts,
 						_ => vec![],
 					};
+					let target_rules = rewrite.target(server_name.as_str());
 					prompts
 						.into_iter()
 						.filter(|p| {
@@ -461,16 +560,26 @@ impl Relay {
 							)
 						})
 						.map(|mut p| {
-							p.name = multiplex_naming::resource_name(
-								default_target_name.as_ref(),
-								server_name.as_str(),
-								&p.name,
-							);
+							if let Some(tr) = target_rules {
+								apply_prompt_rewrite(&mut p, &tr.prompts);
+							}
+							p.name = if flat {
+								p.name.clone()
+							} else {
+								multiplex_naming::resource_name(
+									default_target_name.as_ref(),
+									server_name.as_str(),
+									&p.name,
+								)
+							};
 							p
 						})
 						.collect_vec()
 				})
 				.collect_vec();
+			if flat {
+				prompts = filter_flat_prompt_collisions(prompts);
+			}
 			Ok(
 				ListPromptsResult {
 					prompts,
@@ -483,15 +592,18 @@ impl Relay {
 	}
 	pub fn merge_resources(&self) -> Box<MergeFn> {
 		let policies = self.policies.clone();
+		let rewrite = self.mcp_rewrite.clone();
 		let default_target_name = self.upstreams.default_target_name.clone();
+		let flat = rewrite.flat();
 		Box::new(move |streams, cel| {
-			let resources = streams
+			let mut resources = streams
 				.into_iter()
 				.flat_map(|(server_name, s)| {
 					let resources = match s {
 						ServerResult::ListResourcesResult(lrr) => lrr.resources,
 						_ => vec![],
 					};
+					let target_rules = rewrite.target(server_name.as_str());
 					resources
 						.into_iter()
 						.filter(|r| {
@@ -503,16 +615,23 @@ impl Relay {
 								cel,
 							)
 						})
-						.map(|r| {
+						.map(|mut r| {
+							if let Some(tr) = target_rules {
+								apply_resource_rewrite(&mut r, &tr.resources);
+							}
 							apply_multiplex_to_listed_resource(
 								default_target_name.as_ref(),
 								server_name.as_str(),
 								r,
+								flat,
 							)
 						})
 						.collect_vec()
 				})
 				.collect_vec();
+			if flat {
+				resources = filter_flat_resource_collisions(resources);
+			}
 			Ok(
 				ListResourcesResult {
 					resources,
@@ -525,9 +644,11 @@ impl Relay {
 	}
 	pub fn merge_resource_templates(&self) -> Box<MergeFn> {
 		let policies = self.policies.clone();
+		let rewrite = self.mcp_rewrite.clone();
 		let default_target_name = self.upstreams.default_target_name.clone();
+		let flat = rewrite.flat();
 		Box::new(move |streams, cel| {
-			let resource_templates = streams
+			let mut resource_templates = streams
 				.into_iter()
 				.flat_map(|(server_name, s)| {
 					let resource_templates = match s {
@@ -550,11 +671,15 @@ impl Relay {
 								default_target_name.as_ref(),
 								server_name.as_str(),
 								rt,
+								flat,
 							)
 						})
 						.collect_vec()
 				})
 				.collect_vec();
+			if flat {
+				resource_templates = filter_flat_resource_template_collisions(resource_templates);
+			}
 			Ok(
 				ListResourceTemplatesResult {
 					resource_templates,
@@ -774,10 +899,20 @@ impl Relay {
 	}
 
 	pub fn parse_resource_uri(&self, uri: &str) -> Result<(String, String), UpstreamError> {
-		crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(
-			self.upstreams.default_target_name.as_ref(),
-			uri,
-		)
+		#[cfg(feature = "adobe")]
+		{
+			return crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(
+				self.upstreams.default_target_name.as_ref(),
+				uri,
+			);
+		}
+		#[cfg(not(feature = "adobe"))]
+		{
+			multiplex_naming::parse_multiplex_resource_uri(
+				self.upstreams.default_target_name.as_ref(),
+				uri,
+			)
+		}
 	}
 
 	pub async fn send_single_map_response<F>(
@@ -857,10 +992,9 @@ impl Relay {
 		pv: ProtocolVersion,
 		resource_subscribe: bool,
 		upstream_instructions: Vec<(String, String)>,
+		server: Option<CompiledServerRewrite>,
 	) -> ServerInfo {
 		let capabilities = {
-			// Prompts are supported with multiplexing using proxy-prefixed names.
-			// Resources are supported with multiplexing using service+scheme:// URI prefixing.
 			let mut builder = ServerCapabilities::builder()
 				.enable_tools()
 				.enable_tool_list_changed()
@@ -873,22 +1007,48 @@ impl Relay {
 			}
 			builder.build()
 		};
-		let gateway_preamble = "This server is a gateway to a set of mcp servers. It is responsible for routing requests to the correct server and aggregating the results.";
-		let instructions = if upstream_instructions.is_empty() {
-			Some(gateway_preamble.to_string())
-		} else {
-			let mut merged = String::from(gateway_preamble);
-			for (server_name, instruction) in &upstream_instructions {
-				merged.push_str(&format!("\n\n[{server_name}]\n{instruction}"));
-			}
-			Some(merged)
+		let gateway_preamble = server
+			.as_ref()
+			.and_then(|s| s.instructions.clone())
+			.unwrap_or_else(|| {
+				"This server is a gateway to a set of mcp servers. It is responsible for routing requests to the correct server and aggregating the results.".to_string()
+			});
+		let instructions = match server.as_ref().map(|s| s.upstream_instructions) {
+			Some(UpstreamInstructionsMode::Replace) => Some(gateway_preamble),
+			Some(UpstreamInstructionsMode::Prepend) => {
+				if upstream_instructions.is_empty() {
+					Some(gateway_preamble)
+				} else {
+					let mut merged = gateway_preamble;
+					for (server_name, instruction) in &upstream_instructions {
+						merged.push_str(&format!("\n\n[{server_name}]\n{instruction}"));
+					}
+					Some(merged)
+				}
+			},
+			_ => {
+				if upstream_instructions.is_empty() {
+					Some(gateway_preamble)
+				} else {
+					let mut merged = gateway_preamble;
+					for (server_name, instruction) in &upstream_instructions {
+						merged.push_str(&format!("\n\n[{server_name}]\n{instruction}"));
+					}
+					Some(merged)
+				}
+			},
 		};
+		let server_name = server
+			.as_ref()
+			.and_then(|s| s.name.clone())
+			.unwrap_or_else(|| "agentgateway".to_string());
+		let server_version = server
+			.as_ref()
+			.and_then(|s| s.version.clone())
+			.unwrap_or_else(|| BuildInfo::new().version.to_string());
 		ServerInfo::new(capabilities)
 			.with_protocol_version(pv)
-			.with_server_info(Implementation::new(
-				"agentgateway",
-				BuildInfo::new().version.to_string(),
-			))
+			.with_server_info(Implementation::new(server_name, server_version))
 			.with_instructions(instructions.unwrap_or_default())
 	}
 
@@ -963,9 +1123,11 @@ impl Relay {
 	pub fn merge_tasks(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		use rmcp::model::ListTasksResult;
 		let policies = self.policies.clone();
+		let rewrite = self.mcp_rewrite.clone();
 		let default_target_name = self.upstreams.default_target_name.clone();
+		let flat = rewrite.flat();
 		Box::new(move |streams| {
-			let tasks = streams
+			let mut tasks = streams
 				.into_iter()
 				.flat_map(|(server_name, s)| {
 					let tasks = match s {
@@ -984,16 +1146,21 @@ impl Relay {
 							)
 						})
 						.map(|mut t| {
-							t.task_id = multiplex_naming::resource_name(
-								default_target_name.as_ref(),
-								server_name.as_str(),
-								&t.task_id,
-							);
+							if !flat {
+								t.task_id = multiplex_naming::resource_name(
+									default_target_name.as_ref(),
+									server_name.as_str(),
+									&t.task_id,
+								);
+							}
 							t
 						})
 						.collect_vec()
 				})
 				.collect_vec();
+			if flat {
+				tasks = filter_flat_task_collisions(tasks);
+			}
 			Ok(ListTasksResult::new(tasks).into())
 		})
 	}

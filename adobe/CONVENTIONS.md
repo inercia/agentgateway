@@ -10,8 +10,8 @@
 1. **Gate Adobe-only logic** with `#[cfg(feature = "adobe")]` (and tests behind the same flag when they cover Adobe-only behavior).
 2. **Prefer small modules** under `adobe/` for policy/docs Makefiles that are not meant to compile into upstream.
 3. **Do not revert** Ethos JWT/SSE patches without explicit security review:
-   - `crates/agentgateway/src/jwt.rs`
-   - `crates/agentgateway/src/sse.rs`
+   - `crates/agentgateway/src/http/jwt.rs`
+   - `crates/agentgateway/src/mcp/sse.rs`
 4. **Automation alignment:** `classify_commit.py` treats the following as **protected**:
    - Paths containing **`/jwt.rs`**
    - Paths containing **`/sse.rs`**
@@ -25,6 +25,10 @@ Before running the **`agentgateway-sync`** skill (`inspect_state.py`, rebase, PR
 
 ## Build / packaging
 
-Adobe container builds set the `CARGO_FEATURES` Docker build-arg (default **`agentgateway/ui,agentgateway/adobe`** in `adobe/Makefile`) so the `cargo build` step in [Dockerfile](../Dockerfile) actually receives the package-qualified feature list. The build-arg name MUST match the Dockerfile's `ARG CARGO_FEATURES` declaration; if it does not, Docker silently drops it and the resulting binary is built without `adobe`, stripping every `#[cfg(feature = "adobe")]` block at compile time. Local testing should include `--features agentgateway/adobe` (or `cargo build -p agentgateway --features adobe`) when validating integration branches.
+Adobe **snapshot/release** images are built from [`adobe/Dockerfile`](Dockerfile) (see [`DOCKER.md`](DOCKER.md)); the repo-root [`Dockerfile`](../Dockerfile) stays **identical to upstream** to reduce sync conflicts. Adobe-only Docker deltas (sccache, extra `.dockerignore` entries) live under `adobe/` or the commented Adobe section of `.dockerignore`.
+
+Adobe container builds set the `CARGO_FEATURES` Docker build-arg (default **`agentgateway/ui,agentgateway/adobe`** in `adobe/Makefile`) so the `cargo build` step receives the package-qualified feature list. The build-arg name MUST match the Dockerfile's `ARG CARGO_FEATURES` declaration; if it does not, Docker silently drops it and the resulting binary is built without `adobe`, stripping every `#[cfg(feature = "adobe")]` block at compile time. Local testing should include `--features agentgateway/adobe` (or `cargo build -p agentgateway --features adobe`) when validating integration branches.
 
 **CEL / JSON schema (`schema/cel.json`, generated docs):** regenerate with the repo's xtask after rebases; MCPInfo includes `mcp.task` unconditionally for Ethos policy parity.
+
+**Snapshot vs release:** `make snapshot` (from `adobe/`) builds with `PROFILE=quick-release`, sccache, and persistent buildx cache for faster iterative images; `make release` uses `PROFILE=release` (LTO). Override with `PROFILE=release make snapshot` when you need a prod-like snapshot build.

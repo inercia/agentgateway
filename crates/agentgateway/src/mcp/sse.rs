@@ -9,6 +9,7 @@ use futures_util::StreamExt;
 use rmcp::model::{ClientJsonRpcMessage, ClientRequest};
 use tokio_stream::wrappers::ReceiverStream;
 
+#[cfg(feature = "adobe")]
 use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 
 use crate::http::{DropBody, Request, Response, filters};
@@ -123,14 +124,24 @@ impl LegacySSEService {
 				Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
 			}),
 		);
-		let session_id = session.id.clone();
 		let (parts, _) = request.into_parts();
+		#[cfg(feature = "adobe")]
+		let session_id = session.id.clone();
+		#[cfg(feature = "adobe")]
 		let mut resp = Sse::new(stream).into_response().map(|b| {
 			DropBody::new(
 				b,
 				session::dropper(self.session_manager.clone(), session, parts),
 			)
 		});
+		#[cfg(not(feature = "adobe"))]
+		let resp = Sse::new(stream).into_response().map(|b| {
+			DropBody::new(
+				b,
+				session::dropper(self.session_manager.clone(), session, parts),
+			)
+		});
+		#[cfg(feature = "adobe")]
 		if let Ok(val) = session_id.parse() {
 			resp.headers_mut().insert(HEADER_SESSION_ID, val);
 		}

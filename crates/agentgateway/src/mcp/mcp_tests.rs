@@ -4349,6 +4349,566 @@ async fn mcp_guardrails_mutated_resource_read_reaches_upstream() {
 }
 
 #[cfg(feature = "adobe")]
+mod mcp_rewrite_tests {
+	use super::*;
+	use rmcp::model::AnnotateAble;
+
+	fn fake_target_with_rewrite(
+	name: &str,
+	addr: SocketAddr,
+	rewrite: crate::mcp::McpRewritePolicy,
+) -> Arc<McpTarget> {
+	Arc::new(McpTarget {
+		name: name.into(),
+		spec: crate::types::agent::McpTargetSpec::Mcp(crate::types::agent::StreamableHTTPTargetSpec {
+			backend: crate::types::agent::SimpleBackendReference::Backend(strng::format!(
+				"/unused-{name}"
+			)),
+			path: "/mcp".to_string(),
+		}),
+		backend_policies: crate::store::BackendPolicies {
+			mcp_rewrite: Some(rewrite),
+			..Default::default()
+		},
+		backend: Some(crate::types::agent::SimpleBackend::Opaque(
+			crate::types::agent::ResourceName::new(strng::format!("backend-{name}"), "".into()),
+			crate::types::agent::Target::Address(addr),
+		)),
+		always_use_prefix: false,
+	})
+}
+
+#[test]
+fn merge_tools_applies_rename_before_multiplex_prefix() {
+	use std::borrow::Cow;
+	use std::sync::Arc;
+
+	use rmcp::model::{ListToolsResult, ServerResult, Tool};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::single_tool_rename("echo", "echo_renamed");
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![fake_target_with_rewrite(
+				"svc",
+				SocketAddr::from(([127, 0, 0, 1], 30301)),
+				rewrite,
+			)],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tools(cel);
+	let tool = Tool::new(
+		Cow::Owned("echo".to_string()),
+		Cow::Borrowed(""),
+		Arc::new(serde_json::Map::new()),
+	);
+	let streams = vec![(
+		"svc".into(),
+		ServerResult::ListToolsResult(ListToolsResult {
+			tools: vec![tool],
+			next_cursor: None,
+			meta: None,
+		}),
+	)];
+	let out = merge(streams).unwrap();
+	let ServerResult::ListToolsResult(ltr) = out else {
+		panic!("expected ListToolsResult");
+	};
+	assert_eq!(ltr.tools[0].name.as_ref(), "echo_renamed");
+}
+
+#[test]
+fn merge_tools_auth_on_upstream_rename_invisible_to_cel() {
+	use std::borrow::Cow;
+	use std::sync::Arc;
+
+	use rmcp::model::{ListToolsResult, ServerResult, Tool};
+
+	let deny_secret = McpAuthorization::new(RuleSet::new(PolicySet::new(
+		vec![],
+		vec![Arc::new(
+			cel::Expression::new_strict(r#"mcp.tool.name == "secret""#).unwrap(),
+		)],
+		vec![],
+	)));
+	let policies = crate::mcp::McpAuthorizationSet::new(crate::http::authorization::RuleSets::from(
+		vec![deny_secret.into_inner()],
+	));
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::single_tool_rename("echo", "echo_renamed");
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![fake_target_with_rewrite(
+				"svc",
+				SocketAddr::from(([127, 0, 0, 1], 30302)),
+				rewrite,
+			)],
+			..Default::default()
+		},
+		policies,
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tools(cel);
+	let streams = vec![(
+		"svc".into(),
+		ServerResult::ListToolsResult(ListToolsResult {
+			tools: vec![
+				Tool::new(
+					Cow::Owned("echo".to_string()),
+					Cow::Borrowed(""),
+					Arc::new(serde_json::Map::new()),
+				),
+				Tool::new(
+					Cow::Owned("secret".to_string()),
+					Cow::Borrowed(""),
+					Arc::new(serde_json::Map::new()),
+				),
+			],
+			next_cursor: None,
+			meta: None,
+		}),
+	)];
+	let out = merge(streams).unwrap();
+	let ServerResult::ListToolsResult(ltr) = out else {
+		panic!("expected ListToolsResult");
+	};
+	let names: Vec<_> = ltr.tools.iter().map(|t| t.name.as_ref()).collect();
+	assert_eq!(names, vec!["echo_renamed"]);
+}
+
+#[test]
+fn flat_resolve_tool_call_uses_tools_list_route_index() {
+	use std::borrow::Cow;
+	use std::sync::Arc;
+
+	use rmcp::model::{ListToolsResult, ServerResult, Tool};
+
+	let federation = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let everything_rewrite =
+		crate::mcp::rewrite::McpRewritePolicy::single_tool_rename("echo", "echo_demo");
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite(
+					"mcp-server-everything",
+					SocketAddr::from(([127, 0, 0, 1], 30320)),
+					everything_rewrite,
+				),
+				fake_target_with_rewrite(
+					"mcp-server-threejs",
+					SocketAddr::from(([127, 0, 0, 1], 30321)),
+					federation.clone(),
+				),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tools(cel);
+	let mk = |n: &str| {
+		Tool::new(
+			Cow::Owned(n.to_string()),
+			Cow::Borrowed(""),
+			Arc::new(serde_json::Map::new()),
+		)
+	};
+	let _ = merge(vec![
+		(
+			"mcp-server-everything".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("echo")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+		(
+			"mcp-server-threejs".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("show_threejs_scene")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+	])
+	.unwrap();
+
+	let (target, upstream) = relay.resolve_tool_call("show_threejs_scene").unwrap();
+	assert_eq!(target, "mcp-server-threejs");
+	assert_eq!(upstream, "show_threejs_scene");
+
+	let (target, upstream) = relay.resolve_tool_call("echo_demo").unwrap();
+	assert_eq!(target, "mcp-server-everything");
+	assert_eq!(upstream, "echo");
+}
+
+#[test]
+fn resolve_tool_call_maps_exposed_to_upstream() {
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::single_tool_rename("echo", "echo_renamed");
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![fake_target_with_rewrite(
+				"svc",
+				SocketAddr::from(([127, 0, 0, 1], 30303)),
+				rewrite,
+			)],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+	let (target, upstream) = relay.resolve_tool_call("echo_renamed").unwrap();
+	assert_eq!(target, "svc");
+	assert_eq!(upstream, "echo");
+}
+
+#[test]
+fn flat_merge_tools_omits_pass_through_name_collision() {
+	use std::borrow::Cow;
+	use std::sync::Arc;
+
+	use rmcp::model::{ListToolsResult, ServerResult, Tool};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("a", SocketAddr::from(([127, 0, 0, 1], 30304)), rewrite.clone()),
+				fake_target_with_rewrite("b", SocketAddr::from(([127, 0, 0, 1], 30305)), rewrite),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tools(cel);
+	let mk = |n: &str| {
+		Tool::new(
+			Cow::Owned(n.to_string()),
+			Cow::Borrowed(""),
+			Arc::new(serde_json::Map::new()),
+		)
+	};
+	let streams = vec![
+		(
+			"a".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("search")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+		(
+			"b".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("search")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+	];
+	let out = merge(streams).unwrap();
+	let ServerResult::ListToolsResult(ltr) = out else {
+		panic!("expected ListToolsResult");
+	};
+	assert_eq!(ltr.tools.len(), 1);
+	assert_eq!(ltr.tools[0].name.as_ref(), "search");
+}
+
+#[test]
+fn flat_merge_resources_keeps_flat_name_and_multiplex_uri() {
+	use rmcp::model::{ListResourcesResult, RawResource, ServerResult};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("alpha", SocketAddr::from(([127, 0, 0, 1], 30306)), rewrite.clone()),
+				fake_target_with_rewrite("beta", SocketAddr::from(([127, 0, 0, 1], 30313)), rewrite),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_resources(cel);
+	let resource = RawResource::new("memo://insights/report", "memo".to_string()).no_annotation();
+	let streams = vec![(
+		"alpha".into(),
+		ServerResult::ListResourcesResult(ListResourcesResult {
+			resources: vec![resource],
+			next_cursor: None,
+			meta: None,
+		}),
+	)];
+	let out = merge(streams).unwrap();
+	let ServerResult::ListResourcesResult(lrr) = out else {
+		panic!("expected ListResourcesResult");
+	};
+	assert_eq!(lrr.resources.len(), 1);
+	assert_eq!(lrr.resources[0].name, "memo");
+	assert!(
+		lrr.resources[0].uri.contains("alpha+"),
+		"expected multiplexed URI, got {}",
+		lrr.resources[0].uri
+	);
+	let (target, original) =
+		crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(None, &lrr.resources[0].uri)
+			.unwrap();
+	assert_eq!(target, "alpha");
+	assert_eq!(original, "memo://insights/report");
+}
+
+#[test]
+fn flat_merge_resources_omits_pass_through_name_collision() {
+	use rmcp::model::{ListResourcesResult, RawResource, ServerResult};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("a", SocketAddr::from(([127, 0, 0, 1], 30307)), rewrite.clone()),
+				fake_target_with_rewrite("b", SocketAddr::from(([127, 0, 0, 1], 30308)), rewrite),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_resources(cel);
+	let mk = |uri: &str| RawResource::new(uri, "memo".to_string()).no_annotation();
+	let streams = vec![
+		(
+			"a".into(),
+			ServerResult::ListResourcesResult(ListResourcesResult {
+				resources: vec![mk("memo://a/1")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+		(
+			"b".into(),
+			ServerResult::ListResourcesResult(ListResourcesResult {
+				resources: vec![mk("memo://b/1")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+	];
+	let out = merge(streams).unwrap();
+	let ServerResult::ListResourcesResult(lrr) = out else {
+		panic!("expected ListResourcesResult");
+	};
+	assert_eq!(lrr.resources.len(), 1);
+	assert_eq!(lrr.resources[0].name, "memo");
+}
+
+#[test]
+fn flat_merge_resource_templates_keeps_flat_name_and_multiplex_uri_template() {
+	use rmcp::model::{ListResourceTemplatesResult, RawResourceTemplate, ServerResult};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("alpha", SocketAddr::from(([127, 0, 0, 1], 30309)), rewrite.clone()),
+				fake_target_with_rewrite("beta", SocketAddr::from(([127, 0, 0, 1], 30314)), rewrite),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_resource_templates(cel);
+	let template =
+		RawResourceTemplate::new("file://{path}", "template").no_annotation();
+	let streams = vec![(
+		"alpha".into(),
+		ServerResult::ListResourceTemplatesResult(ListResourceTemplatesResult {
+			resource_templates: vec![template],
+			next_cursor: None,
+			meta: None,
+		}),
+	)];
+	let out = merge(streams).unwrap();
+	let ServerResult::ListResourceTemplatesResult(lrt) = out else {
+		panic!("expected ListResourceTemplatesResult");
+	};
+	assert_eq!(lrt.resource_templates.len(), 1);
+	assert_eq!(lrt.resource_templates[0].name, "template");
+	assert!(
+		lrt.resource_templates[0]
+			.uri_template
+			.starts_with("alpha+file://"),
+		"expected multiplexed template URI, got {}",
+		lrt.resource_templates[0].uri_template
+	);
+}
+
+#[test]
+fn flat_merge_tasks_omits_pass_through_id_collision() {
+	use rmcp::model::{ListTasksResult, ServerResult, Task, TaskStatus};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("a", SocketAddr::from(([127, 0, 0, 1], 30310)), rewrite.clone()),
+				fake_target_with_rewrite("b", SocketAddr::from(([127, 0, 0, 1], 30311)), rewrite),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tasks(cel);
+	let mk = |id: &str| {
+		let ts = "2020-01-01T00:00:00Z";
+		Task::new(id.to_string(), TaskStatus::Working, ts.into(), ts.into())
+	};
+	let streams = vec![
+		(
+			"a".into(),
+			ServerResult::ListTasksResult(ListTasksResult::new(vec![mk("job-1")])),
+		),
+		(
+			"b".into(),
+			ServerResult::ListTasksResult(ListTasksResult::new(vec![mk("job-1")])),
+		),
+	];
+	let out = merge(streams).unwrap();
+	let ServerResult::ListTasksResult(ltr) = out else {
+		panic!("expected ListTasksResult");
+	};
+	assert_eq!(ltr.tasks.len(), 1);
+	assert_eq!(ltr.tasks[0].task_id, "job-1");
+}
+
+#[test]
+fn resolve_task_call_flat_maps_to_target() {
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![fake_target_with_rewrite(
+				"svc",
+				SocketAddr::from(([127, 0, 0, 1], 30312)),
+				rewrite.clone(),
+			)],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+	let (target, upstream) = relay.resolve_task_call("job-42").unwrap();
+	assert_eq!(target, "svc");
+	assert_eq!(upstream, "job-42");
+
+	let ambiguous = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("a", SocketAddr::from(([127, 0, 0, 1], 30315)), rewrite.clone()),
+				fake_target_with_rewrite("b", SocketAddr::from(([127, 0, 0, 1], 30316)), rewrite),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+	assert!(ambiguous.resolve_task_call("job-42").is_err());
+}
+}
+
+#[cfg(feature = "adobe")]
 mod adobe_mcp_apps_integration {
 	use std::borrow::Cow;
 	use std::sync::Arc;

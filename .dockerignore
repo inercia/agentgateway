@@ -1,6 +1,19 @@
+# Upstream entries (keep in sync with agentgateway/agentgateway main)
 target
 .idea
 .vscode
 .DS_Store
 manifests
 examples
+
+# Adobe: extra excludes for smaller adobe/Dockerfile build context (merge on upstream sync; see adobe/DOCKER.md)
+.git
+.github
+.claude
+controller
+api
+go.mod
+go.sum
+schema
+ui/node_modules
+ui/.next

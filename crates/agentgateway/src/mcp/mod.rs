@@ -5,6 +5,12 @@ mod mcp_apps;
 mod mergestream;
 pub(crate) mod multiplex_naming;
 mod rbac;
+#[cfg(feature = "adobe")]
+pub(crate) mod rewrite;
+#[cfg(not(feature = "adobe"))]
+pub(crate) mod rewrite_stub;
+#[cfg(not(feature = "adobe"))]
+pub(crate) use rewrite_stub as rewrite;
 mod router;
 mod session;
 mod sse;
@@ -19,6 +25,9 @@ use std::time::Duration;
 use axum_core::BoxError;
 use prometheus_client::encoding::{EncodeLabelValue, LabelValueEncoder};
 pub use rbac::{McpAuthorization, McpAuthorizationSet, ResourceId, ResourceType};
+pub use rewrite::{
+	CompiledServerRewrite, McpRewritePolicy, McpRewriteSet, ResourceNaming,
+};
 use rmcp::model::RequestId;
 pub use router::App;
 use serde::{Deserialize, Serialize};
