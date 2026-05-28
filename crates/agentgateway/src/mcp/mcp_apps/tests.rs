@@ -334,6 +334,73 @@ fn rewrap_resource_updated_notification_multiplexes_uri() {
 }
 
 #[test]
+fn rewrap_task_status_notification_multiplexes_task_id() {
+	use rmcp::model::{CustomNotification, JsonRpcNotification, JsonRpcVersion2_0, ServerNotification};
+	use serde_json::json;
+
+	let mut msg = ServerJsonRpcMessage::Notification(JsonRpcNotification {
+		jsonrpc: JsonRpcVersion2_0,
+		notification: ServerNotification::CustomNotification(CustomNotification::new(
+			"notifications/tasks/status",
+			Some(json!({ "taskId": "job-42", "status": "working" })),
+		)),
+	});
+	crate::mcp::multiplex_naming::task_outbound::rewrap_outbound_multiplex_task_message(
+		None, false, "svc1", &mut msg,
+	);
+	let ServerJsonRpcMessage::Notification(jn) = &msg else {
+		panic!("expected notification");
+	};
+	let ServerNotification::CustomNotification(n) = &jn.notification else {
+		panic!("expected custom notification");
+	};
+	assert_eq!(n.method, "notifications/tasks/status");
+	let params = n.params.as_ref().expect("params");
+	assert_eq!(params["taskId"], "svc1_job-42");
+}
+
+#[test]
+fn rewrap_server_result_get_task_multiplexes_task_id() {
+	use rmcp::model::{GetTaskResult, ServerResult, Task, TaskStatus};
+
+	let ts = "2020-01-01T00:00:00Z";
+	let mut result = ServerResult::GetTaskResult(GetTaskResult {
+		meta: None,
+		task: Task::new("job-7".into(), TaskStatus::Working, ts.into(), ts.into()),
+	});
+	routing::rewrap_server_result_task_ids(None, false, "airbnb", &mut result);
+	let ServerResult::GetTaskResult(gtr) = result else {
+		panic!("expected GetTaskResult");
+	};
+	assert_eq!(gtr.task.task_id, "airbnb_job-7");
+}
+
+#[test]
+fn rewrap_task_status_notification_flat_mode_keeps_bare_id() {
+	use rmcp::model::{CustomNotification, JsonRpcNotification, JsonRpcVersion2_0, ServerNotification};
+	use serde_json::json;
+
+	let mut msg = ServerJsonRpcMessage::Notification(JsonRpcNotification {
+		jsonrpc: JsonRpcVersion2_0,
+		notification: ServerNotification::CustomNotification(CustomNotification::new(
+			"notifications/tasks/status",
+			Some(json!({ "taskId": "job-42", "status": "working" })),
+		)),
+	});
+	crate::mcp::multiplex_naming::task_outbound::rewrap_outbound_multiplex_task_message(
+		None, true, "svc1", &mut msg,
+	);
+	let ServerJsonRpcMessage::Notification(jn) = &msg else {
+		panic!("expected notification");
+	};
+	let ServerNotification::CustomNotification(n) = &jn.notification else {
+		panic!("expected custom notification");
+	};
+	let params = n.params.as_ref().expect("params");
+	assert_eq!(params["taskId"], "job-42");
+}
+
+#[test]
 fn parse_resource_uri_mixed_single_backend_passthrough() {
 	let default = Some("only".to_string());
 	let (t, u) = routing::parse_resource_uri_mixed(default.as_ref(), "anything://x/y").unwrap();

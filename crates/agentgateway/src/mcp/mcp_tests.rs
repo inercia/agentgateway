@@ -1844,6 +1844,14 @@ mod mockserver {
 				},
 			)]))
 		}
+
+		#[tool(
+			description = "Enqueue a task (federation routing tests)",
+			execution(task_support = "optional")
+		)]
+		fn enqueue_task_tool(&self) -> Result<CallToolResult, McpError> {
+			Ok(CallToolResult::success(vec![Content::text("task queued")]))
+		}
 	}
 
 	#[prompt_router]
@@ -2010,21 +2018,35 @@ mod mockserver {
 			)]))
 		}
 
+		async fn enqueue_task(
+			&self,
+			_request: CallToolRequestParams,
+			_: RequestContext<RoleServer>,
+		) -> Result<CreateTaskResult, McpError> {
+			let ts = "2020-01-01T00:00:00Z";
+			Ok(CreateTaskResult::new(Task::new(
+				"job-99".into(),
+				TaskStatus::Working,
+				ts.into(),
+				ts.into(),
+			)))
+		}
+
 		async fn get_task_info(
 			&self,
 			GetTaskInfoParams { task_id, .. }: GetTaskInfoParams,
 			_: RequestContext<RoleServer>,
 		) -> Result<GetTaskResult, McpError> {
-			if task_id != "t1" {
+			if task_id != "t1" && task_id != "job-99" {
 				return Err(McpError::invalid_params(
-					format!("expected upstream task id t1, got {task_id}"),
+					format!("expected upstream task id t1 or job-99, got {task_id}"),
 					None,
 				));
 			}
 			let ts = "2020-01-01T00:00:00Z";
 			Ok(GetTaskResult {
 				meta: None,
-				task: Task::new("t1".into(), TaskStatus::Working, ts.into(), ts.into()),
+				task: Task::new(task_id, TaskStatus::Working, ts.into(), ts.into()),
 			})
 		}
 
@@ -4497,8 +4519,8 @@ fn merge_tools_auth_on_upstream_rename_invisible_to_cel() {
 	assert_eq!(names, vec!["echo_renamed"]);
 }
 
-#[test]
-fn flat_resolve_tool_call_uses_tools_list_route_index() {
+#[tokio::test]
+async fn flat_resolve_tool_call_uses_tools_list_route_index() {
 	use std::borrow::Cow;
 	use std::sync::Arc;
 
@@ -4564,17 +4586,243 @@ fn flat_resolve_tool_call_uses_tools_list_route_index() {
 	])
 	.unwrap();
 
-	let (target, upstream) = relay.resolve_tool_call("show_threejs_scene").unwrap();
+	let ctx = crate::mcp::upstream::IncomingRequestContext::empty();
+	let (target, upstream) = relay
+		.resolve_tool_call("show_threejs_scene", &ctx)
+		.await
+		.unwrap();
 	assert_eq!(target, "mcp-server-threejs");
 	assert_eq!(upstream, "show_threejs_scene");
 
-	let (target, upstream) = relay.resolve_tool_call("echo_demo").unwrap();
+	let (target, upstream) = relay
+		.resolve_tool_call("echo_demo", &ctx)
+		.await
+		.unwrap();
 	assert_eq!(target, "mcp-server-everything");
 	assert_eq!(upstream, "echo");
 }
 
-#[test]
-fn resolve_tool_call_maps_exposed_to_upstream() {
+/// Regression for the multi-target federation `tools/call` bug
+/// (`TO_INVESTIGATE.md`, ambiguous flat tool name).
+///
+/// Federation has FOUR targets — only one (`mcp-server-everything`) advertises
+/// `simulate-research-query`; the other three advertise unrelated tools and
+/// have no per-target rewrite. Before the fix, `resolve_flat_tool` would either
+/// drop the entry from `build_flat_tool_route_index` (on collision) or fall
+/// through to the broken pass-through fallback and return "ambiguous flat tool
+/// name" because the three rewrite-less targets each contributed a hit.
+#[tokio::test]
+async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation() {
+	use std::borrow::Cow;
+	use std::sync::Arc;
+
+	use rmcp::model::{ListToolsResult, ServerResult, Tool};
+
+	let federation = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let everything_rewrite =
+		crate::mcp::rewrite::McpRewritePolicy::single_tool_rename("echo", "echo_demo");
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite(
+					"mcp-server-everything",
+					SocketAddr::from(([127, 0, 0, 1], 30331)),
+					everything_rewrite,
+				),
+				fake_target_with_rewrite(
+					"mcp-server-airbnb",
+					SocketAddr::from(([127, 0, 0, 1], 30332)),
+					federation.clone(),
+				),
+				fake_target_with_rewrite(
+					"mcp-server-map",
+					SocketAddr::from(([127, 0, 0, 1], 30333)),
+					federation.clone(),
+				),
+				fake_target_with_rewrite(
+					"mcp-server-threejs",
+					SocketAddr::from(([127, 0, 0, 1], 30334)),
+					federation,
+				),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tools(cel);
+	let mk = |n: &str| {
+		Tool::new(
+			Cow::Owned(n.to_string()),
+			Cow::Borrowed(""),
+			Arc::new(serde_json::Map::new()),
+		)
+	};
+	// Simulate the merged `tools/list` shape from the user's repro:
+	// - everything: echo (→ echo_demo via rewrite) + the task-required tool
+	// - airbnb / map / threejs: unique per-target tools
+	let _ = merge(vec![
+		(
+			"mcp-server-everything".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("echo"), mk("simulate-research-query")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+		(
+			"mcp-server-airbnb".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("airbnb_search_listings")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+		(
+			"mcp-server-map".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("map_geocode")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+		(
+			"mcp-server-threejs".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("show_threejs_scene")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+	])
+	.unwrap();
+
+	let ctx = crate::mcp::upstream::IncomingRequestContext::empty();
+
+	// The task-required tool — only advertised by mcp-server-everything.
+	let (target, upstream) = relay
+		.resolve_tool_call("simulate-research-query", &ctx)
+		.await
+		.expect("simulate-research-query must route to mcp-server-everything");
+	assert_eq!(target, "mcp-server-everything");
+	assert_eq!(upstream, "simulate-research-query");
+
+	// The rewritten name — only advertised by mcp-server-everything.
+	let (target, upstream) = relay
+		.resolve_tool_call("echo_demo", &ctx)
+		.await
+		.expect("echo_demo must route to mcp-server-everything");
+	assert_eq!(target, "mcp-server-everything");
+	assert_eq!(upstream, "echo");
+
+	// Unique names from each other target also route.
+	let (target, _) = relay
+		.resolve_tool_call("airbnb_search_listings", &ctx)
+		.await
+		.unwrap();
+	assert_eq!(target, "mcp-server-airbnb");
+	let (target, _) = relay
+		.resolve_tool_call("map_geocode", &ctx)
+		.await
+		.unwrap();
+	assert_eq!(target, "mcp-server-map");
+	let (target, _) = relay
+		.resolve_tool_call("show_threejs_scene", &ctx)
+		.await
+		.unwrap();
+	assert_eq!(target, "mcp-server-threejs");
+}
+
+/// Regression for [`build_flat_tool_route_index`] inconsistency: when multiple
+/// federation targets share a tool name (e.g., several `server-everything`
+/// clones each export `echo`), the user-visible `tools/list` keeps the first
+/// via `filter_flat_tool_collisions`, but the route index used to *remove*
+/// both, making the visible name unroutable.
+#[tokio::test]
+async fn flat_route_index_first_wins_keeps_colliding_name_callable() {
+	use std::borrow::Cow;
+	use std::sync::Arc;
+
+	use rmcp::model::{ListToolsResult, ServerResult, Tool};
+
+	let federation = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("a", SocketAddr::from(([127, 0, 0, 1], 30341)), federation.clone()),
+				fake_target_with_rewrite("b", SocketAddr::from(([127, 0, 0, 1], 30342)), federation),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tools(cel);
+	let mk = |n: &str| {
+		Tool::new(
+			Cow::Owned(n.to_string()),
+			Cow::Borrowed(""),
+			Arc::new(serde_json::Map::new()),
+		)
+	};
+	let out = merge(vec![
+		(
+			"a".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("echo")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+		(
+			"b".into(),
+			ServerResult::ListToolsResult(ListToolsResult {
+				tools: vec![mk("echo")],
+				next_cursor: None,
+				meta: None,
+			}),
+		),
+	])
+	.unwrap();
+	let ServerResult::ListToolsResult(ltr) = out else {
+		panic!("expected ListToolsResult");
+	};
+	// list keeps the first occurrence
+	assert_eq!(ltr.tools.len(), 1);
+	assert_eq!(ltr.tools[0].name.as_ref(), "echo");
+
+	// route index must keep the SAME first occurrence so the visible name is callable.
+	let ctx = crate::mcp::upstream::IncomingRequestContext::empty();
+	let (target, upstream) = relay
+		.resolve_tool_call("echo", &ctx)
+		.await
+		.expect("echo must remain callable after first-wins collision");
+	assert_eq!(target, "a");
+	assert_eq!(upstream, "echo");
+}
+
+#[tokio::test]
+async fn resolve_tool_call_maps_exposed_to_upstream() {
 	let rewrite = crate::mcp::rewrite::McpRewritePolicy::single_tool_rename("echo", "echo_renamed");
 	let relay = Relay::new(
 		McpBackendGroup {
@@ -4591,7 +4839,11 @@ fn resolve_tool_call_maps_exposed_to_upstream() {
 		},
 	)
 	.unwrap();
-	let (target, upstream) = relay.resolve_tool_call("echo_renamed").unwrap();
+	let ctx = crate::mcp::upstream::IncomingRequestContext::empty();
+	let (target, upstream) = relay
+		.resolve_tool_call("echo_renamed", &ctx)
+		.await
+		.unwrap();
 	assert_eq!(target, "svc");
 	assert_eq!(upstream, "echo");
 }
@@ -4869,6 +5121,154 @@ fn flat_merge_tasks_omits_pass_through_id_collision() {
 }
 
 #[test]
+fn flat_merge_tasks_populates_route_index_for_tasks_get() {
+	use rmcp::model::{ListTasksResult, ServerResult, Task, TaskStatus};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("a", SocketAddr::from(([127, 0, 0, 1], 30317)), rewrite.clone()),
+				fake_target_with_rewrite("b", SocketAddr::from(([127, 0, 0, 1], 30318)), rewrite),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tasks(cel);
+	let mk = |id: &str| {
+		let ts = "2020-01-01T00:00:00Z";
+		Task::new(id.to_string(), TaskStatus::Working, ts.into(), ts.into())
+	};
+	let _ = merge(vec![(
+		"a".into(),
+		ServerResult::ListTasksResult(ListTasksResult::new(vec![mk("job-99")])),
+	)]);
+
+	let (target, upstream) = relay.resolve_task_call("job-99").unwrap();
+	assert_eq!(target, "a");
+	assert_eq!(upstream, "job-99");
+}
+
+/// Regression: `tasks/list` must not wipe routes that `tools/call` create
+/// (`record_flat_task_route`) populated since the last fanout. Without the
+/// first-wins merge in `merge_tasks`, a follow-up `tasks/get` on the just-
+/// created task would error with `unknown flat task id` until the upstream's
+/// own `tasks/list` caught up.
+#[test]
+fn flat_merge_tasks_preserves_create_recorded_route() {
+	use rmcp::model::{ListTasksResult, ServerResult, Task, TaskStatus};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite("a", SocketAddr::from(([127, 0, 0, 1], 30351)), rewrite.clone()),
+				fake_target_with_rewrite("b", SocketAddr::from(([127, 0, 0, 1], 30352)), rewrite),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	// Simulate `tools/call` → CreateTaskResult on target `a` before any
+	// federated `tasks/list` has run.
+	relay.record_flat_task_route("a", "created-1");
+
+	// Now federated `tasks/list` runs; upstream `b` returns a different task
+	// and doesn't (yet) know about `created-1`.
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tasks(cel);
+	let ts = "2020-01-01T00:00:00Z";
+	let mk = |id: &str| Task::new(id.to_string(), TaskStatus::Working, ts.into(), ts.into());
+	let _ = merge(vec![(
+		"b".into(),
+		ServerResult::ListTasksResult(ListTasksResult::new(vec![mk("job-from-b")])),
+	)]);
+
+	// `created-1` must still resolve to target `a` — the new entry from `b`
+	// is also routable, but the prior create-recorded entry is preserved.
+	let (target, upstream) = relay
+		.resolve_task_call("created-1")
+		.expect("create-recorded route must survive tasks/list");
+	assert_eq!(target, "a");
+	assert_eq!(upstream, "created-1");
+
+	let (target, upstream) = relay
+		.resolve_task_call("job-from-b")
+		.expect("tasks/list-derived route must also resolve");
+	assert_eq!(target, "b");
+	assert_eq!(upstream, "job-from-b");
+}
+
+#[tokio::test]
+async fn ensure_flat_task_routes_loaded_noop_when_index_populated() {
+	use crate::mcp::upstream::IncomingRequestContext;
+	use rmcp::model::{ListTasksResult, ServerResult, Task, TaskStatus};
+
+	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![fake_target_with_rewrite(
+				"a",
+				SocketAddr::from(([127, 0, 0, 1], 30321)),
+				rewrite,
+			)],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_tasks(cel);
+	let ts = "2020-01-01T00:00:00Z";
+	let _ = merge(vec![(
+		"a".into(),
+		ServerResult::ListTasksResult(ListTasksResult::new(vec![Task::new(
+			"job-1".into(),
+			TaskStatus::Working,
+			ts.into(),
+			ts.into(),
+		)])),
+	)]);
+
+	let ctx = IncomingRequestContext::empty();
+	relay
+		.ensure_flat_task_routes_loaded(&ctx)
+		.await
+		.expect("noop when index already populated");
+}
+
+#[test]
 fn resolve_task_call_flat_maps_to_target() {
 	let rewrite = crate::mcp::rewrite::McpRewritePolicy::flat_server();
 	let relay = Relay::new(
@@ -4890,7 +5290,7 @@ fn resolve_task_call_flat_maps_to_target() {
 	assert_eq!(target, "svc");
 	assert_eq!(upstream, "job-42");
 
-	let ambiguous = Relay::new(
+	let multi = Relay::new(
 		McpBackendGroup {
 			targets: vec![
 				fake_target_with_rewrite("a", SocketAddr::from(([127, 0, 0, 1], 30315)), rewrite.clone()),
@@ -4904,7 +5304,47 @@ fn resolve_task_call_flat_maps_to_target() {
 		},
 	)
 	.unwrap();
-	assert!(ambiguous.resolve_task_call("job-42").is_err());
+	let err = multi.resolve_task_call("job-42").unwrap_err();
+	assert!(
+		err.to_string().contains("ambiguous flat task id"),
+		"{err}"
+	);
+
+	multi.record_flat_task_route("a", "job-42");
+	let (target, upstream) = multi.resolve_task_call("job-42").unwrap();
+	assert_eq!(target, "a");
+	assert_eq!(upstream, "job-42");
+
+	let prefix_multi = Relay::new(
+		McpBackendGroup {
+			targets: vec![
+				fake_target_with_rewrite(
+					"a",
+					SocketAddr::from(([127, 0, 0, 1], 30319)),
+					crate::mcp::rewrite::McpRewritePolicy::default(),
+				),
+				fake_target_with_rewrite(
+					"b",
+					SocketAddr::from(([127, 0, 0, 1], 30320)),
+					crate::mcp::rewrite::McpRewritePolicy::default(),
+				),
+			],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+		},
+	)
+	.unwrap();
+	let (target, upstream) = prefix_multi.resolve_task_call("a_job-42").unwrap();
+	assert_eq!(target, "a");
+	assert_eq!(upstream, "job-42");
+
+	assert_eq!(
+		crate::mcp::multiplex_naming::wrap_client_task_id(None, "a", "job-99"),
+		"a_job-99"
+	);
 }
 }
 
@@ -5399,7 +5839,7 @@ mod adobe_mcp_apps_integration {
 		let ServerResult::GetTaskResult(gtr) = info else {
 			panic!("expected GetTaskResult");
 		};
-		assert_eq!(gtr.task.task_id, "t1");
+		assert_eq!(gtr.task.task_id, "a_t1");
 
 		let cancel = client
 			.send_request(ClientRequest::CancelTaskRequest(CancelTaskRequest::new(
@@ -5412,13 +5852,13 @@ mod adobe_mcp_apps_integration {
 			.unwrap();
 		match cancel {
 			ServerResult::CancelTaskResult(ctr) => {
-				assert_eq!(ctr.task.task_id, "t1");
+				assert_eq!(ctr.task.task_id, "b_t1");
 				assert_eq!(ctr.task.status, TaskStatus::Cancelled);
 			},
 			ServerResult::GetTaskResult(gtr) => {
 				// `CancelTaskResult` matches the same JSON shape as `GetTaskResult` (flattened task);
 				// serde may decode successful cancel responses as `GetTaskResult`.
-				assert_eq!(gtr.task.task_id, "t1");
+				assert_eq!(gtr.task.task_id, "b_t1");
 				assert_eq!(gtr.task.status, TaskStatus::Cancelled);
 			},
 			other => panic!("unexpected cancel response: {other:?}"),
@@ -5437,5 +5877,50 @@ mod adobe_mcp_apps_integration {
 			panic!("expected CustomResult for tasks/result payload, got {payload:?}");
 		};
 		assert_eq!(custom.0, json!({"done": true}));
+	}
+
+	#[tokio::test]
+	async fn multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+				false,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+
+		let create = client
+			.send_request(ClientRequest::CallToolRequest(
+				rmcp::model::CallToolRequest::new(
+					rmcp::model::CallToolRequestParams::new("a_enqueue_task_tool")
+						.with_task(serde_json::Map::new()),
+				),
+			))
+			.await
+			.expect("tools/call with task");
+		let ServerResult::CreateTaskResult(ctr) = create else {
+			panic!("expected CreateTaskResult, got {create:?}");
+		};
+		assert_eq!(ctr.task.task_id, "a_job-99");
+
+		let info = client
+			.send_request(ClientRequest::GetTaskInfoRequest(GetTaskInfoRequest::new(
+				GetTaskInfoParams {
+					meta: None,
+					task_id: "a_job-99".into(),
+				},
+			)))
+			.await
+			.expect("tasks/get");
+		let ServerResult::GetTaskResult(gtr) = info else {
+			panic!("expected GetTaskResult");
+		};
+		assert_eq!(gtr.task.task_id, "a_job-99");
 	}
 }

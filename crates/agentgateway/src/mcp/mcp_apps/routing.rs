@@ -10,11 +10,19 @@ use rmcp::model::{
 };
 use serde_json::Value;
 
-use crate::mcp::multiplex_naming;
 use crate::mcp::upstream::UpstreamError;
 
 #[allow(unused_imports)] // re-exports for `routing::` consumers (tests and external callers)
-pub use crate::mcp::multiplex_naming::{DELIMITER, parse_resource_name, resource_name};
+pub use crate::mcp::multiplex_naming::{
+	wrap_client_task_id, DELIMITER, parse_resource_name, resource_name,
+	unwrap_client_task_id as parse_task_id,
+};
+
+#[cfg(feature = "adobe")]
+#[allow(unused_imports)]
+pub use crate::mcp::multiplex_naming::{
+	rewrap_create_task_id, rewrap_outbound_task_id, rewrap_server_result_task_ids,
+};
 
 const UI_SCHEME: &str = "ui";
 const MULTIPLEX_URI_QUERY_PARAM: &str = "u";
@@ -165,14 +173,6 @@ pub fn parse_resource_uri_mixed(
 	unwrap_plus_scheme_multiplex(uri)
 }
 
-pub fn parse_task_id(
-	default_target_name: Option<&String>,
-	id: &str,
-) -> Result<(String, String), UpstreamError> {
-	let (t, rest) = multiplex_naming::parse_resource_name(default_target_name, id)?;
-	Ok((t.to_string(), rest.to_string()))
-}
-
 /// Rewrap outbound multiplex [`ServerJsonRpcMessage`] for the federated client (subscribe streams).
 pub fn rewrap_outbound_multiplex_server_message(
 	default_target_name: Option<&String>,
@@ -182,10 +182,9 @@ pub fn rewrap_outbound_multiplex_server_message(
 	if default_target_name.is_some() {
 		return;
 	}
-	let ServerJsonRpcMessage::Notification(jn) = msg else {
-		return;
-	};
-	if let ServerNotification::ResourceUpdatedNotification(n) = &mut jn.notification {
+	if let ServerJsonRpcMessage::Notification(jn) = msg
+		&& let ServerNotification::ResourceUpdatedNotification(n) = &mut jn.notification
+	{
 		n.params.uri = wrap_resource_uri_mixed(default_target_name, upstream_target, &n.params.uri);
 	}
 }

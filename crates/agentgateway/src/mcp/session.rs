@@ -22,6 +22,8 @@ use sse_stream::{KeepAlive, Sse, SseBody, SseStream};
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::http::Response;
+#[cfg(feature = "adobe")]
+use crate::mcp::federation_outbound::map_mux_outbound_message;
 use crate::mcp::handler::{Relay, RelayInputs};
 use crate::mcp::mergestream::Messages;
 use crate::mcp::streamablehttp::{ServerSseMessage, StreamableHttpPostResponse};
@@ -30,6 +32,9 @@ use crate::mcp::{ClientError, rbac};
 use crate::proxy::ProxyError;
 use crate::telemetry::log::{AsyncLog, SpanWriteOnDrop};
 use crate::{mcp, *};
+
+#[cfg(feature = "adobe")]
+mod tasks;
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -49,6 +54,11 @@ struct SessionEntry {
 const SESSION_REAP_INTERVAL: Duration = Duration::from_secs(30);
 
 impl Session {
+	#[cfg(feature = "adobe")]
+	pub(super) fn relay(&self) -> &Relay {
+		self.relay.as_ref()
+	}
+
 	/// send a message to upstream server(s)
 	pub async fn send(
 		&mut self,
@@ -88,9 +98,10 @@ impl Session {
 						Some(ClientRequest::GetPromptRequest(gpr)) => gpr.params.name.clone(),
 						_ => unreachable!("match arm guarantees single-target request type"),
 					};
+					let ctx = IncomingRequestContext::new(&parts);
 					let resolved = match request_type {
 						Some(ClientRequest::CallToolRequest(_)) => {
-							self.relay.resolve_tool_call(name.as_str())
+							self.relay.resolve_tool_call(name.as_str(), &ctx).await
 						},
 						Some(ClientRequest::GetPromptRequest(_)) => {
 							self.relay.resolve_prompt_call(name.as_str())
@@ -263,38 +274,6 @@ impl Session {
 			});
 		}
 		Ok((target_name, original_uri))
-	}
-
-	#[cfg(feature = "adobe")]
-	fn authorize_multiplex_task_id(
-		&self,
-		task_id: &str,
-		method: &str,
-		span: &mut SpanWriteOnDrop,
-		log: &AsyncLog<mcp::MCPInfo>,
-		cel: &rbac::CelExecWrapper,
-	) -> Result<(String, String), UpstreamError> {
-		let (target_name, original_id) = self
-			.relay
-			.resolve_task_call(task_id)
-			.map_err(|e| UpstreamError::InvalidRequest(format!("invalid task id: {task_id}: {e}")))?;
-		span.rename_span(format!("{method} {target_name}"));
-		log.non_atomic_mutate(|l| {
-			l.set_task(target_name.clone(), original_id.clone());
-		});
-		if !self.relay.policies.validate(
-			&rbac::ResourceType::Task(rbac::ResourceId::new(
-				target_name.clone(),
-				original_id.clone(),
-			)),
-			cel,
-		) {
-			return Err(UpstreamError::Authorization {
-				resource_type: "task".to_string(),
-				resource_name: task_id.to_string(),
-			});
-		}
-		Ok((target_name, original_id))
 	}
 
 	async fn handle_read_resource_request(
@@ -623,7 +602,8 @@ impl Session {
 					},
 					ClientRequest::CallToolRequest(ctr) => {
 						let name = ctr.params.name.clone();
-						let (service_name, upstream_tool) = self.relay.resolve_tool_call(name.as_ref())?;
+						let (service_name, upstream_tool) =
+							self.relay.resolve_tool_call(name.as_ref(), &ctx).await?;
 						span.rename_span(format!("{method} {service_name}"));
 						let call_arguments = ctr.params.arguments.clone();
 						log.non_atomic_mutate(|l| {
@@ -632,14 +612,8 @@ impl Session {
 						});
 						ctr.params.name = upstream_tool.clone().into();
 
-						// Per MCP Apps spec, tool call results may carry `_meta.ui.resourceUri`
-						// pointing at a `ui://...` resource the host renders. When multiplexing,
-						// that URI must be wrapped to the federated form so the host's follow-up
-						// `resources/read` resolves to the correct upstream target. Without this,
-						// upstream-native `ui://` URIs reach `parse_resource_uri_mixed` raw and
-						// fail with "multiplex URI missing 'u' query param".
-						let default_mux = self.relay.default_target_name();
-						let target_for_map = service_name.to_string();
+						// Guardrails (decision 2) run for every build before the upstream call; the
+						// adobe build additionally applies federated MCP-Apps result rewriting.
 						self
 							.authorize_with_ctx(
 								service_name.as_str(),
@@ -654,31 +628,34 @@ impl Session {
 								&name,
 							)
 							.await?;
-						self
-							.relay
-							.send_single_map_response(
-								r,
-								ctx,
-								service_name.as_str(),
-								move |msg| {
-									if let ServerJsonRpcMessage::Response(jr) = msg
-										&& let ServerResult::CallToolResult(result) = &mut jr.result
-									{
-										crate::mcp::mcp_apps::routing::rewrite_tool_ui_meta(
-											default_mux.as_ref(),
-											target_for_map.as_str(),
-											&mut result.meta,
-										);
-										crate::mcp::mcp_apps::routing::rewrap_call_tool_result_content(
-											default_mux.as_ref(),
-											target_for_map.as_str(),
-											&mut result.content,
-										);
-									}
-								},
-								Some(log.clone()),
-							)
-							.await
+						#[cfg(feature = "adobe")]
+						{
+							let default_mux = self.relay.default_target_name();
+							let flat = self.relay.mcp_rewrite.flat();
+							let target_for_map = service_name.to_string();
+							self
+								.relay
+								.send_single_map_response(
+									r,
+									ctx,
+									service_name.as_str(),
+									tasks::map_tools_call_outbound(
+										self.relay().clone(),
+										default_mux,
+										flat,
+										target_for_map,
+									),
+									Some(log.clone()),
+								)
+								.await
+						}
+						#[cfg(not(feature = "adobe"))]
+						{
+							self
+								.relay
+								.send_single(r, ctx, service_name.as_str(), Some(log.clone()))
+								.await
+						}
 					},
 					ClientRequest::GetPromptRequest(gpr) => {
 						let name = gpr.params.name.clone();
@@ -765,6 +742,7 @@ impl Session {
 							self.authorize_federated_resource_uri(&uri, &method, &mut span, &log, &cel)?;
 						srr.params.uri = original_uri;
 						let default_mux = self.relay.default_target_name();
+						let flat = self.relay.mcp_rewrite.flat();
 						let tn = target_name.clone();
 						self
 							.relay
@@ -772,13 +750,7 @@ impl Session {
 								r,
 								ctx,
 								target_name.as_str(),
-								move |msg| {
-									crate::mcp::mcp_apps::routing::rewrap_outbound_multiplex_server_message(
-										default_mux.as_ref(),
-										tn.as_str(),
-										msg,
-									);
-								},
+								map_mux_outbound_message(default_mux, flat, tn),
 								None,
 							)
 							.await
@@ -791,6 +763,7 @@ impl Session {
 							self.authorize_federated_resource_uri(&uri, &method, &mut span, &log, &cel)?;
 						urr.params.uri = original_uri;
 						let default_mux = self.relay.default_target_name();
+						let flat = self.relay.mcp_rewrite.flat();
 						let tn = target_name.clone();
 						self
 							.relay
@@ -798,13 +771,7 @@ impl Session {
 								r,
 								ctx,
 								target_name.as_str(),
-								move |msg| {
-									crate::mcp::mcp_apps::routing::rewrap_outbound_multiplex_server_message(
-										default_mux.as_ref(),
-										tn.as_str(),
-										msg,
-									);
-								},
+								map_mux_outbound_message(default_mux, flat, tn),
 								None,
 							)
 							.await
@@ -812,49 +779,27 @@ impl Session {
 
 					#[cfg(feature = "adobe")]
 					ClientRequest::ListTasksRequest(_) => {
-						let targets = self
-							.relay
-							.capabilities
-							.upstreams_with_tasks(&self.relay.all_target_names());
-						self
-							.relay
-							.send_fanout_to(&targets, r, ctx, self.relay.merge_tasks(cel))
-							.await
+						tasks::handle_list_tasks(self, r, ctx, cel).await
 					},
 
 					#[cfg(feature = "adobe")]
 					ClientRequest::GetTaskInfoRequest(gtr) => {
 						let task_id = gtr.params.task_id.clone();
-						let (target_name, original_id) =
-							self.authorize_multiplex_task_id(&task_id, &method, &mut span, &log, &cel)?;
-						gtr.params.task_id = original_id;
-						self
-							.relay
-							.send_single(r, ctx, target_name.as_str(), None)
+						tasks::forward_task_rpc(self, r, task_id, ctx, &method, &mut span, &log, &cel)
 							.await
 					},
 
 					#[cfg(feature = "adobe")]
 					ClientRequest::GetTaskResultRequest(gtr) => {
 						let task_id = gtr.params.task_id.clone();
-						let (target_name, original_id) =
-							self.authorize_multiplex_task_id(&task_id, &method, &mut span, &log, &cel)?;
-						gtr.params.task_id = original_id;
-						self
-							.relay
-							.send_single(r, ctx, target_name.as_str(), None)
+						tasks::forward_task_rpc(self, r, task_id, ctx, &method, &mut span, &log, &cel)
 							.await
 					},
 
 					#[cfg(feature = "adobe")]
 					ClientRequest::CancelTaskRequest(ctr) => {
 						let task_id = ctr.params.task_id.clone();
-						let (target_name, original_id) =
-							self.authorize_multiplex_task_id(&task_id, &method, &mut span, &log, &cel)?;
-						ctr.params.task_id = original_id;
-						self
-							.relay
-							.send_single(r, ctx, target_name.as_str(), None)
+						tasks::forward_task_rpc(self, r, task_id, ctx, &method, &mut span, &log, &cel)
 							.await
 					},
 

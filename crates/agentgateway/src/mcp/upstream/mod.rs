@@ -104,6 +104,12 @@ impl IncomingRequestContext {
 		*req.extensions_mut() = self.ext.clone();
 		req
 	}
+	pub fn headers(&self) -> &http::HeaderMap {
+		&self.headers
+	}
+	pub fn extensions(&self) -> &::http::Extensions {
+		&self.ext
+	}
 }
 
 #[derive(Debug, Error)]

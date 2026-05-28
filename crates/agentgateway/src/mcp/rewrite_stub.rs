@@ -161,15 +161,6 @@ impl McpRewriteSet {
 		)))
 	}
 
-	#[cfg(feature = "adobe")]
-	pub fn resolve_flat_task(
-		&self,
-		exposed: &str,
-	) -> Result<(String, String), crate::mcp::upstream::UpstreamError> {
-		Err(crate::mcp::upstream::UpstreamError::InvalidRequest(format!(
-			"unknown flat task id: {exposed}"
-		)))
-	}
 }
 
 impl McpRewritePolicy {

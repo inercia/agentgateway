@@ -37,6 +37,14 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 
 - Dev velocity: `make snapshot` defaults to `quick-release` with sccache and Docker buildx local cache; use `make release` (or `PROFILE=release make snapshot`) for the LTO release image.
 - MCP rewrite dataplane: `BackendPolicySpec.McpRewrite` (proto field 18) compiled into `McpRewriteSet` and applied in the MCP handler after authorization and before multiplexing (`auth` → `rewrite` → `multiplex`). Supports per-target tool/prompt/resource presentation rules plus federation-scoped `rewrite.server` (`name`, `instructions`, `resourceNaming` Flat/Prefix). Session state keeps a reverse-map from exposed Flat names back to upstream `(target, upstream)` for `tools/call`, `prompts/get`, and related methods.
-- **Flat** `resourceNaming` now applies to federated `resources/list`, `resources/templates/list`, and `tasks/list` (not only tools/prompts): flat exposed names with runtime collision omission; URIs and `uriTemplate` values remain multiplex-wrapped for `resources/read` / MCP Apps routing; flat `taskId` resolution fans out across upstream targets with ambiguity errors when multiple backends could own the same id.
 - Adobe feature gating (`6469b3ea`): MCP rewrite, IMS JWT `created_at`/`expires_in` validation, and MCP SSE `mcp-session-id` response header compile only with `feature = "adobe"`; default builds use `rewrite_stub` no-ops so upstream-style binaries stay lean.
 - Control-plane pairing: configure presentation via agentlink **0.5.1** `AIPolicy.spec.backend.mcp.rewrite` (per-target `sectionName`; federation-only `rewrite.server`). See agentlink `BREAKING_CHANGES.md` 0.5.1 and `docs/MCPRewritePolicy.md`.
+
+
+## 1.2.1
+
+- **Federated MCP Tasks (multiplex + McpRewrite):** end-to-end Tasks when fronting multiple upstreams with `AIPolicy.spec.backend.mcp.rewrite` — `tasks/list` fanout, `tasks/get` / `tasks/result` / `tasks/cancel` with RBAC, `tools/call` → `CreateTaskResult`, and merged `TasksCapability` on initialize (MCP Inspector–compatible).
+- **Task ids honor `resourceNaming`:** Prefix federation exposes `target_<upstreamTaskId>` on every client-visible surface (create, list, get/result/cancel responses, `notifications/tasks/status`, per-upstream GET/SSE). Flat federation keeps bare upstream ids with a `flat_task_routes` index (same first-wins collision rules as tools), populated by `tasks/list` and create.
+- **Flat federation routing (tools + tasks):** first-wins route indexes for `tools/call` and task RPCs; lazy internal `tools/list` / `tasks/list` refresh when an in-memory index is empty (multi-replica session resume).
+- **Flat catalog presentation:** `resourceNaming: Flat` applies to federated `resources/list`, `resources/templates/list`, and `tasks/list` (not only tools/prompts); exposed names omit on collision; resource URIs / `uriTemplate` stay multiplex-wrapped for `resources/read` and MCP Apps.
+- **Implementation layout:** task outbound rewrap in `multiplex_naming`, Adobe task dispatch in `session/tasks.rs`, `federation_outbound::map_mux_outbound_message` for shared stream mapping.
