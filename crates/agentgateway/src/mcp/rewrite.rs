@@ -270,6 +270,39 @@ impl McpRewriteSet {
 		}
 	}
 
+	/// Resolve a Flat-mode client task id to `(target, upstream_task_id)`.
+	///
+	/// When `routes` is populated (after federated `tasks/list` or `tools/call` create),
+	/// use the same exposed-id → `(target, upstream)` mapping as the merged catalog.
+	pub fn resolve_flat_task(
+		&self,
+		exposed: &str,
+		routes: Option<&HashMap<String, (String, String)>>,
+		all_targets: &[String],
+	) -> Result<(String, String), crate::mcp::upstream::UpstreamError> {
+		use crate::mcp::upstream::UpstreamError;
+
+		if let Some(routes) = routes {
+			if let Some(route) = routes.get(exposed) {
+				return Ok(route.clone());
+			}
+		}
+
+		let mut hits = Vec::new();
+		for target in all_targets {
+			hits.push((target.clone(), exposed.to_string()));
+		}
+		match hits.len() {
+			0 => Err(UpstreamError::InvalidRequest(format!(
+				"unknown flat task id: {exposed}"
+			))),
+			1 => Ok(hits.pop().unwrap()),
+			_ => Err(UpstreamError::InvalidRequest(format!(
+				"ambiguous flat task id: {exposed}"
+			))),
+		}
+	}
+
 	/// Resolve a Flat-mode client tool name to `(target, upstream)`.
 	///
 	/// When `routes` is populated (after a federated `tools/list`), use the same
@@ -342,27 +375,6 @@ impl McpRewriteSet {
 		}
 	}
 
-	/// Resolve a Flat-mode client task id to `(target, upstream_task_id)`.
-	#[cfg(feature = "adobe")]
-	pub fn resolve_flat_task(
-		&self,
-		exposed: &str,
-	) -> Result<(String, String), crate::mcp::upstream::UpstreamError> {
-		use crate::mcp::upstream::UpstreamError;
-		let mut hits = Vec::new();
-		for (target, _) in &self.per_target {
-			hits.push((target.clone(), exposed.to_string()));
-		}
-		match hits.len() {
-			0 => Err(UpstreamError::InvalidRequest(format!(
-				"unknown flat task id: {exposed}"
-			))),
-			1 => Ok(hits.pop().unwrap()),
-			_ => Err(UpstreamError::InvalidRequest(format!(
-				"ambiguous flat task id: {exposed}"
-			))),
-		}
-	}
 }
 
 impl McpRewritePolicy {
@@ -504,25 +516,47 @@ pub fn filter_flat_prompt_collisions(prompts: Vec<Prompt>) -> Vec<Prompt> {
 	out
 }
 
-/// Build exposed tool name → `(target, upstream)` using the same first-wins collision
-/// semantics as [`filter_flat_tool_collisions`].
-pub fn build_flat_tool_route_index(
+fn build_flat_route_index(
 	entries: impl IntoIterator<Item = (String, String, String)>,
+	collision_log_label: &'static str,
 ) -> HashMap<String, (String, String)> {
-	let mut seen: HashMap<String, ()> = HashMap::new();
 	let mut out = HashMap::new();
 	for (target, upstream, exposed) in entries {
-		if seen.insert(exposed.clone(), ()).is_some() {
+		if out.contains_key(&exposed) {
 			warn!(
 				exposed = %exposed,
-				"mcp_flat_name_collision: omitting duplicate exposed tool name from route index"
+				kind = collision_log_label,
+				"mcp_flat_name_collision: keeping first exposed name in route index"
 			);
-			out.remove(&exposed);
 			continue;
 		}
 		out.insert(exposed, (target, upstream));
 	}
 	out
+}
+
+/// Build exposed tool name → `(target, upstream)` using first-wins on collision.
+///
+/// Matches [`filter_flat_tool_collisions`] which keeps the first occurrence of an
+/// exposed name in the user-visible `tools/list`: when a name collides across
+/// federation targets the FIRST target's mapping stays so `tools/call` can still
+/// route what the client saw in the list. Previously this dropped both copies,
+/// making the tool visible in the list but unroutable.
+pub fn build_flat_tool_route_index(
+	entries: impl IntoIterator<Item = (String, String, String)>,
+) -> HashMap<String, (String, String)> {
+	build_flat_route_index(entries, "tool name")
+}
+
+/// Build exposed task id → `(target, upstream_task_id)` using first-wins on collision.
+///
+/// Matches [`filter_flat_task_collisions`]: when the same bare task id appears on
+/// multiple federation targets, the first target's mapping stays so `tasks/get` can
+/// route what the client saw in `tasks/list`.
+pub fn build_flat_task_route_index(
+	entries: impl IntoIterator<Item = (String, String, String)>,
+) -> HashMap<String, (String, String)> {
+	build_flat_route_index(entries, "task id")
 }
 
 pub fn filter_flat_tool_collisions(tools: Vec<Tool>) -> Vec<Tool> {
@@ -578,8 +612,10 @@ pub fn filter_flat_resource_template_collisions(
 	out
 }
 
-/// Omit tasks whose exposed task id collides under Flat naming.
-#[cfg(feature = "adobe")]
+/// Omit tasks whose bare exposed task id collides under Flat naming.
+///
+/// When two upstreams return the same bare id, keep the first occurrence in the
+/// user-visible `tasks/list` (same first-wins rule as [`build_flat_task_route_index`]).
 pub fn filter_flat_task_collisions(tasks: Vec<Task>) -> Vec<Task> {
 	let mut seen: HashMap<String, ()> = HashMap::new();
 	let mut out = Vec::with_capacity(tasks.len());
@@ -852,17 +888,46 @@ mod tests {
 	}
 
 	#[test]
+	fn build_flat_task_route_index_matches_collision_filter() {
+		let index = build_flat_task_route_index([
+			("a".into(), "job-1".into(), "job-1".into()),
+			("b".into(), "job-1".into(), "job-1".into()),
+			("c".into(), "job-9".into(), "job-9".into()),
+		]);
+		assert_eq!(index.get("job-1"), Some(&("a".into(), "job-1".into())));
+		assert_eq!(index.get("job-9"), Some(&("c".into(), "job-9".into())));
+	}
+
+	#[test]
+	fn resolve_flat_task_uses_route_index() {
+		let mut routes = HashMap::new();
+		routes.insert("job-42".into(), ("a".into(), "job-42".into()));
+		let set = McpRewriteSet {
+			server: Some(CompiledServerRewrite {
+				resource_naming: ResourceNaming::Flat,
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let (target, upstream) = set
+			.resolve_flat_task("job-42", Some(&routes), &["b".into()])
+			.unwrap();
+		assert_eq!(target, "a");
+		assert_eq!(upstream, "job-42");
+	}
+
+	#[test]
 	fn build_flat_tool_route_index_matches_collision_filter() {
+		// First-wins: matches what `filter_flat_tool_collisions` keeps in the
+		// user-visible list. The first target's mapping for a colliding name
+		// stays so the client can still call what it sees in `tools/list`.
 		let index = build_flat_tool_route_index([
 			("a".into(), "search".into(), "search".into()),
 			("b".into(), "search".into(), "search".into()),
 			("c".into(), "unique".into(), "unique".into()),
 		]);
-		assert!(!index.contains_key("search"));
-		assert_eq!(
-			index.get("unique"),
-			Some(&("c".into(), "unique".into()))
-		);
+		assert_eq!(index.get("search"), Some(&("a".into(), "search".into())));
+		assert_eq!(index.get("unique"), Some(&("c".into(), "unique".into())));
 	}
 
 	#[test]

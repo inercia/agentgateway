@@ -1,5 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod guardrails;
+#[cfg(feature = "adobe")]
+mod federation_outbound;
 mod handler;
 mod mcp_apps;
 mod mergestream;

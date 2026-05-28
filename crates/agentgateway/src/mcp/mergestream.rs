@@ -13,6 +13,27 @@ use crate::*;
 
 pub(crate) struct Messages(BoxStream<'static, Result<ServerJsonRpcMessage, ClientError>>);
 
+#[cfg(feature = "adobe")]
+impl Messages {
+	/// Map every message in the stream (e.g. multiplex rewrap per upstream target on GET fanout).
+	pub fn map_each<F>(self, mut f: F) -> Self
+	where
+		F: FnMut(&mut ServerJsonRpcMessage) + Send + 'static,
+	{
+		Messages(
+			self
+				.0
+				.map(move |msg| {
+					msg.map(|mut m| {
+						f(&mut m);
+						m
+					})
+				})
+				.boxed(),
+		)
+	}
+}
+
 impl Messages {
 	/// pending returns a stream that never returns any messages. It is not an empty stream that closes immediately; it hangs forever.
 	pub fn pending() -> Self {

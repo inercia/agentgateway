@@ -12,8 +12,8 @@ use itertools::Itertools;
 use rmcp::ErrorData;
 use rmcp::model::{
 	ClientNotification, ClientRequest, Implementation, JsonRpcNotification, JsonRpcRequest,
-	ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
-	ProtocolVersion, RequestId, ServerCapabilities, ServerInfo, ServerJsonRpcMessage,
+	ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsRequest,
+	ListToolsResult, ProtocolVersion, RequestId, ServerCapabilities, ServerInfo, ServerJsonRpcMessage,
 	ServerNotification, ServerResult,
 };
 use tracing::{debug, warn};
@@ -31,7 +31,7 @@ use crate::mcp::rewrite::{
 	CompiledServerRewrite, McpRewriteSet, UpstreamInstructionsMode,
 };
 #[cfg(feature = "adobe")]
-use crate::mcp::rewrite::filter_flat_task_collisions;
+use crate::mcp::rewrite::{build_flat_task_route_index, filter_flat_task_collisions};
 use crate::mcp::router::McpBackendGroup;
 use crate::mcp::streamablehttp::ServerSseMessage;
 use crate::mcp::upstream::{IncomingRequestContext, UpstreamError};
@@ -134,7 +134,15 @@ pub struct Relay {
 	pub mcp_rewrite: McpRewriteSet,
 	pub(crate) capabilities: Arc<crate::mcp::mcp_apps::capabilities::TargetCapabilities>,
 	/// Populated by federated `tools/list` when `resourceNaming: Flat`; used by `tools/call`.
+	///
+	/// Always present on [`Relay`] (non-Adobe builds use stub `flat()` and never populate).
 	flat_tool_routes: Arc<RwLock<HashMap<String, (String, String)>>>,
+	/// Populated by federated `tasks/list` and `tools/call` create when `resourceNaming: Flat`.
+	///
+	/// Adobe-only: task RPCs are behind `feature = "adobe"`; tools index stays on `Relay` for
+	/// shared `resolve_tool_call` API surface in all builds.
+	#[cfg(feature = "adobe")]
+	flat_task_routes: Arc<RwLock<HashMap<String, (String, String)>>>,
 }
 
 pub struct RelayInputs {
@@ -174,6 +182,8 @@ impl Relay {
 			mcp_rewrite,
 			capabilities: Arc::new(crate::mcp::mcp_apps::capabilities::TargetCapabilities::new()),
 			flat_tool_routes: Arc::new(RwLock::new(HashMap::new())),
+			#[cfg(feature = "adobe")]
+			flat_task_routes: Arc::new(RwLock::new(HashMap::new())),
 		})
 	}
 	pub fn with_policies(&self, policies: McpAuthorizationSet) -> Self {
@@ -185,6 +195,8 @@ impl Relay {
 			mcp_rewrite: self.mcp_rewrite.clone(),
 			capabilities: self.capabilities.clone(),
 			flat_tool_routes: self.flat_tool_routes.clone(),
+			#[cfg(feature = "adobe")]
+			flat_task_routes: self.flat_task_routes.clone(),
 		}
 	}
 
@@ -196,6 +208,25 @@ impl Relay {
 		})
 	}
 
+	/// Record a Flat-mode task route when a task is created or listed.
+	#[cfg(feature = "adobe")]
+	pub(crate) fn record_flat_task_route(&self, target: &str, upstream_id: &str) {
+		if !self.mcp_rewrite.flat() || self.upstreams.default_target_name.is_some() {
+			return;
+		}
+		let exposed = upstream_id.to_string();
+		let mut routes = self.flat_task_routes.write();
+		if routes.contains_key(&exposed) {
+			warn!(
+				exposed = %exposed,
+				"mcp_flat_name_collision: keeping first exposed task id in route index"
+			);
+			return;
+		}
+		routes.insert(exposed, (target.to_string(), upstream_id.to_string()));
+	}
+	}
+
 	pub fn parse_resource_name<'a, 'b: 'a>(
 		&'a self,
 		res: &'b str,
@@ -204,11 +235,18 @@ impl Relay {
 	}
 
 	/// Resolve a client tool name to `(target, upstream_name)` for auth and upstream `tools/call`.
-	pub fn resolve_tool_call(
+	///
+	/// In Flat mode the resolution depends on the route index populated by `tools/list`.
+	/// The index is in-memory only; with multi-replica agentgateway the session can
+	/// resume on a pod whose index is empty. This async path therefore lazily refreshes
+	/// the index via an internal `tools/list` (no-op if already populated or not Flat).
+	pub async fn resolve_tool_call(
 		&self,
 		client_name: &str,
+		ctx: &IncomingRequestContext,
 	) -> Result<(String, String), UpstreamError> {
 		if self.mcp_rewrite.flat() {
+			self.ensure_flat_tool_routes_loaded(ctx).await?;
 			let routes = self.flat_tool_routes.read();
 			return self.mcp_rewrite.resolve_flat_tool(
 				client_name,
@@ -223,6 +261,106 @@ impl Relay {
 			.map(|t| t.resolve_upstream_tool(exposed))
 			.unwrap_or_else(|| exposed.to_string());
 		Ok((target.to_string(), upstream))
+	}
+
+	/// Populate `flat_tool_routes` via an internal `tools/list` if it is empty.
+	///
+	/// The route index lives in-memory per Relay. With agentgateway running
+	/// >1 replicas a session can resume on a pod where this index is empty, and
+	/// `resolve_flat_tool` would then fall through to its broken pass-through fallback
+	/// and produce `ambiguous flat tool name`. This helper makes the route index
+	/// self-healing: any pod that holds a session can repopulate from upstreams.
+	///
+	/// No-op when not Flat or when the route index is already populated. Best-effort
+	/// on internal errors — a later `tools/call` will still surface the underlying
+	/// `unknown flat tool name` if population genuinely failed.
+	async fn ensure_flat_tool_routes_loaded(
+		&self,
+		ctx: &IncomingRequestContext,
+	) -> Result<(), UpstreamError> {
+		if !self.mcp_rewrite.flat() {
+			return Ok(());
+		}
+		if !self.flat_tool_routes.read().is_empty() {
+			return Ok(());
+		}
+		// Reconstruct a minimal CEL context from the incoming request so the merge
+		// closure applies the same policy filter as a client-issued tools/list.
+		let mut req: ::http::Request<()> = ::http::Request::new(());
+		*req.headers_mut() = ctx.headers().clone();
+		*req.extensions_mut() = ctx.extensions().clone();
+		let cel = crate::mcp::rbac::CelExecWrapper::new(req);
+
+		let targets = self
+			.capabilities
+			.upstreams_with_tools(&self.all_target_names());
+		if targets.is_empty() {
+			return Ok(());
+		}
+		let merge = self.merge_tools(cel);
+		let list_req: rmcp::model::ListToolsRequest = ListToolsRequest::default();
+		let req = JsonRpcRequest::new(RequestId::Number(-1), ClientRequest::ListToolsRequest(list_req));
+		// Best-effort: if the internal tools/list fails entirely the route index
+		// stays empty and the subsequent `resolve_flat_tool` will return
+		// `unknown flat tool name`, which is more accurate than the historical
+		// `ambiguous flat tool name` from the broken pass-through fallback.
+		let resp = match self
+			.send_fanout_to(&targets, req, ctx.clone(), merge)
+			.await
+		{
+			Ok(resp) => resp,
+			Err(e) => {
+				tracing::warn!(error = %e, "ensure_flat_tool_routes_loaded: internal tools/list failed");
+				return Ok(());
+			},
+		};
+		// Drain the SSE body so MergeStream polls to completion and the merge
+		// closure runs — that's the side effect that populates flat_tool_routes.
+		let _ = crate::http::read_resp_body(resp).await;
+		Ok(())
+	}
+
+	/// Populate `flat_task_routes` via an internal `tasks/list` if it is empty.
+	///
+	/// Mirrors [`Self::ensure_flat_tool_routes_loaded`]: multi-replica sessions can resume on a
+	/// pod with an empty task route index after create-but-before-list.
+	#[cfg(feature = "adobe")]
+	pub(crate) async fn ensure_flat_task_routes_loaded(
+		&self,
+		ctx: &IncomingRequestContext,
+	) -> Result<(), UpstreamError> {
+		if !self.mcp_rewrite.flat() || self.upstreams.default_target_name.is_some() {
+			return Ok(());
+		}
+		if !self.flat_task_routes.read().is_empty() {
+			return Ok(());
+		}
+		let mut req: ::http::Request<()> = ::http::Request::new(());
+		*req.headers_mut() = ctx.headers().clone();
+		*req.extensions_mut() = ctx.extensions().clone();
+		let cel = crate::mcp::rbac::CelExecWrapper::new(req);
+
+		let targets = self
+			.capabilities
+			.upstreams_with_tasks(&self.all_target_names());
+		if targets.is_empty() {
+			return Ok(());
+		}
+		let merge = self.merge_tasks(cel);
+		let list_req = rmcp::model::ListTasksRequest::default();
+		let req = JsonRpcRequest::new(RequestId::Number(-1), ClientRequest::ListTasksRequest(list_req));
+		let resp = match self
+			.send_fanout_to(&targets, req, ctx.clone(), merge)
+			.await
+		{
+			Ok(resp) => resp,
+			Err(e) => {
+				tracing::warn!(error = %e, "ensure_flat_task_routes_loaded: internal tasks/list failed");
+				return Ok(());
+			},
+		};
+		let _ = crate::http::read_resp_body(resp).await;
+		Ok(())
 	}
 
 	/// Resolve a client prompt name to `(target, upstream_name)`.
@@ -242,29 +380,35 @@ impl Relay {
 		Ok((target.to_string(), upstream))
 	}
 
-	/// Resolve a Flat-mode client task id to `(target, upstream_task_id)`.
+	/// Resolve a client task id to `(target, upstream_task_id)` for `tasks/get`, `tasks/result`,
+	/// and `tasks/cancel`.
+	///
+	/// Prefix federation: `target_upstreamId` parses directly. Flat federation: bare ids use
+	/// [`flat_task_routes`] (populated by `tasks/list` and `tools/call` create). Single-backend
+	/// passthrough applies in both modes.
 	#[cfg(feature = "adobe")]
 	pub fn resolve_task_call(
 		&self,
 		client_id: &str,
 	) -> Result<(String, String), UpstreamError> {
-		if self.mcp_rewrite.flat() {
-			let mut hits = Vec::new();
-			for (name, _) in self.upstreams.iter_named() {
-				hits.push((name.to_string(), client_id.to_string()));
-			}
-			return match hits.len() {
-				0 => Err(UpstreamError::InvalidRequest(format!(
-					"unknown flat task id: {client_id}"
-				))),
-				1 => Ok(hits.pop().unwrap()),
-				_ => Err(UpstreamError::InvalidRequest(format!(
-					"ambiguous flat task id: {client_id}"
-				))),
-			};
+		if self.mcp_rewrite.flat() && self.upstreams.default_target_name.is_none() {
+			let routes = self.flat_task_routes.read();
+			return self.mcp_rewrite.resolve_flat_task(
+				client_id,
+				Some(&routes),
+				&self.all_target_names(),
+			);
 		}
-		let (target, exposed) = self.parse_task_id(client_id)?;
-		Ok((target, exposed))
+		let mut iter = self.upstreams.iter_named();
+		let first = iter.next().map(|(name, _)| name);
+		let count = self.upstreams.size();
+		let single = if iter.next().is_none() { first } else { None };
+		multiplex_naming::resolve_client_task_id(
+			self.upstreams.default_target_name.as_ref(),
+			client_id,
+			count,
+			single.as_deref(),
+		)
 	}
 
 	pub fn get_sessions(&self) -> Option<Vec<MCPSession>> {
@@ -769,7 +913,17 @@ impl Relay {
 		for (name, result) in fut_results {
 			match result {
 				Ok(s) => {
-					let s = self.rewrite_outbound_server_messages(name.as_str(), s);
+				#[cfg(feature = "adobe")]
+					let s = {
+						let default_mux = self.upstreams.default_target_name.clone();
+						let flat = self.mcp_rewrite.flat();
+						let upstream = name.clone();
+						s.map_each(crate::mcp::federation_outbound::map_mux_outbound_message(
+							default_mux,
+							flat,
+							upstream.to_string(),
+						))
+					};
 					streams.push((name, s));
 				},
 				Err(e) => {
@@ -1116,17 +1270,14 @@ impl Relay {
 
 #[cfg(feature = "adobe")]
 impl Relay {
-	pub fn parse_task_id(&self, id: &str) -> Result<(String, String), UpstreamError> {
-		crate::mcp::mcp_apps::routing::parse_task_id(self.upstreams.default_target_name.as_ref(), id)
-	}
-
 	pub fn merge_tasks(&self, cel: CelExecWrapper) -> Box<MergeFn> {
 		use rmcp::model::ListTasksResult;
 		let policies = self.policies.clone();
-		let rewrite = self.mcp_rewrite.clone();
 		let default_target_name = self.upstreams.default_target_name.clone();
-		let flat = rewrite.flat();
+		let flat = self.mcp_rewrite.flat();
+		let flat_task_routes = self.flat_task_routes.clone();
 		Box::new(move |streams| {
+			let mut route_entries = Vec::new();
 			let mut tasks = streams
 				.into_iter()
 				.flat_map(|(server_name, s)| {
@@ -1146,19 +1297,40 @@ impl Relay {
 							)
 						})
 						.map(|mut t| {
-							if !flat {
-								t.task_id = multiplex_naming::resource_name(
+							let upstream_id = t.task_id.to_string();
+							let exposed = if flat {
+								upstream_id.clone()
+							} else if default_target_name.is_none() {
+								multiplex_naming::wrap_client_task_id(
 									default_target_name.as_ref(),
 									server_name.as_str(),
-									&t.task_id,
-								);
+									&upstream_id,
+								)
+							} else {
+								upstream_id.clone()
+							};
+							if flat && default_target_name.is_none() {
+								route_entries.push((
+									server_name.to_string(),
+									upstream_id,
+									exposed.clone(),
+								));
 							}
+							t.task_id = exposed;
 							t
 						})
 						.collect_vec()
 				})
 				.collect_vec();
-			if flat {
+			if flat && default_target_name.is_none() {
+				// First-wins merge into the existing index — preserves routes that
+				// `record_flat_task_route` added on `tools/call` create when the
+				// upstream's `tasks/list` hasn't surfaced the new task yet.
+				let new_index = build_flat_task_route_index(route_entries);
+				let mut routes = flat_task_routes.write();
+				for (k, v) in new_index {
+					routes.entry(k).or_insert(v);
+				}
 				tasks = filter_flat_task_collisions(tasks);
 			}
 			Ok(ListTasksResult::new(tasks).into())

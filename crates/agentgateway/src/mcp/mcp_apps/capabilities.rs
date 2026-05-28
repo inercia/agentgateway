@@ -66,9 +66,9 @@ impl TargetCapabilities {
 
 /// Capabilities advertised by the gateway when merging upstream MCP servers.
 ///
-/// Prompts and tasks are multiplexed via `target_name`-prefixed identifiers (see
-/// [`crate::mcp::multiplex_naming`]), so they are safe to advertise even with
-/// multiple upstreams. Resources use the federated URI wrapping in
+/// Prompts and tasks follow federation `resourceNaming` (Flat vs Prefix) like tools.
+/// Prefix mode uses `target_`-prefixed names; Flat mode uses bare upstream ids with a
+/// gateway route index. Resources use federated URI wrapping in
 /// [`crate::mcp::mcp_apps::routing`].
 pub(crate) fn gateway_merged_capabilities(multiplexing: bool) -> ServerCapabilities {
 	let b = ServerCapabilities::builder()
