@@ -68,18 +68,6 @@ Examples:
 Lowercase. No trailing period in the subject. Reference Adobe-Apis PR
 numbers as `(#N)` when relevant. Wrap bodies at 72–80 characters.
 
-## Build and test locally
-
-```bash
-cargo build --features ui,adobe
-make test
-make -C adobe snapshot   # local docker image, defaults to amd64
-```
-
-`make -C adobe snapshot` (and `release`) need `git describe --match 'v*'`
-to resolve to an upstream tag. If you're working from a sparse fetch,
-run `make -C adobe fetch-tags` first.
-
 ## Releases
 
 Releases are author-driven and CI-automated. The PR author cuts the

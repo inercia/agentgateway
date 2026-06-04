@@ -224,6 +224,9 @@ pub struct Metrics {
 
 	// metrics for request retries
 	pub retries: Counter,
+
+	#[cfg(feature = "adobe")]
+	pub mcp_request_duration: Histogram<MCPCall>,
 }
 
 // FilteredRegistry is a wrapper around Registry that allows to filter out certain metrics.
@@ -349,6 +352,20 @@ impl Metrics {
 			gen_ai_time_to_first_token.clone(),
 		);
 
+		#[cfg(feature = "adobe")]
+		let mcp_request_duration = {
+			let m = Family::<MCPCall, _>::new_with_constructor(move || {
+				PromHistogram::new(HTTP_REQUEST_DURATION_BUCKET)
+			});
+			registry.register_with_unit(
+				"mcp_request_duration",
+				"Duration of MCP calls (seconds)",
+				Unit::Seconds,
+				m.clone(),
+			);
+			m
+		};
+
 		Metrics {
 			requests: build(
 				&mut registry,
@@ -384,6 +401,9 @@ impl Metrics {
 				"mcp_requests",
 				"Total number of MCP tool calls",
 			),
+
+			#[cfg(feature = "adobe")]
+			mcp_request_duration,
 
 			gen_ai_token_usage,
 			gen_ai_cost,
@@ -565,3 +585,68 @@ const OUTPUT_TOKEN_BUCKET: [f64; 14] = [
 const FIRST_TOKEN_BUCKET: [f64; 16] = [
 	0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
 ];
+
+#[cfg(feature = "adobe")]
+pub(crate) mod adobe_metrics {
+	use std::time::Duration;
+
+	use super::{MCPCall, Metrics};
+
+	/// Records the duration of an MCP call into the Adobe-only histogram.
+	/// Must be called with the same MCPCall key used to increment
+	/// `mcp_requests` to preserve count/sum parity (I6 guards this invariant).
+	#[allow(dead_code)]
+	pub fn record_mcp_call(metrics: &Metrics, call: &MCPCall, duration: Duration) {
+		metrics
+			.mcp_request_duration
+			.get_or_create(call)
+			.observe(duration.as_secs_f64());
+	}
+}
+
+#[cfg(all(test, feature = "adobe"))]
+mod adobe_tests {
+	use agent_core::metrics::{CustomField, DefaultedUnknown};
+	use frozen_collections::FzHashSet;
+	use prometheus_client::encoding::text::encode;
+	use prometheus_client::registry::Registry;
+
+	use super::{MCPCall, Metrics, RouteIdentifier};
+
+	#[test]
+	fn mcp_request_duration_registered_under_adobe_feature() {
+		let mut registry = Registry::default();
+		let sub = agent_core::metrics::sub_registry(&mut registry);
+		let metrics = Metrics::new(sub, FzHashSet::default());
+
+		// prometheus_client v0.24 only encodes non-empty families — seed one observation so
+		// the # TYPE / # UNIT / # HELP headers appear in the scraped output.
+		metrics
+			.mcp_request_duration
+			.get_or_create(&MCPCall {
+				method: DefaultedUnknown::default(),
+				resource_type: DefaultedUnknown::default(),
+				server: DefaultedUnknown::default(),
+				resource: DefaultedUnknown::default(),
+				route: RouteIdentifier::default(),
+				custom: CustomField::default(),
+			})
+			.observe(0.001);
+
+		let mut out = String::new();
+		encode(&mut out, &registry).unwrap();
+
+		assert!(
+			out.contains("# TYPE agentgateway_mcp_request_duration_seconds histogram"),
+			"missing TYPE line for histogram; got:\n{out}"
+		);
+		assert!(
+			out.contains("# UNIT agentgateway_mcp_request_duration_seconds seconds"),
+			"missing UNIT line for histogram; got:\n{out}"
+		);
+		assert!(
+			out.contains("# HELP agentgateway_mcp_request_duration_seconds"),
+			"missing HELP line for histogram; got:\n{out}"
+		);
+	}
+}

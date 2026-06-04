@@ -1591,20 +1591,28 @@ impl MockServer {
 }
 
 async fn mock_streamable_http_server(stateful: bool) -> MockServer {
-	mock_streamable_http_server_inner(stateful, None).await
+	mock_streamable_http_server_inner(stateful, None, None).await
 }
 
 type HeaderCapture = std::sync::Arc<std::sync::Mutex<Vec<http::HeaderMap>>>;
 
 async fn mock_streamable_http_server_with_capture(stateful: bool) -> (MockServer, HeaderCapture) {
 	let capture: HeaderCapture = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-	let server = mock_streamable_http_server_inner(stateful, Some(capture.clone())).await;
+	let server = mock_streamable_http_server_inner(stateful, Some(capture.clone()), None).await;
 	(server, capture)
+}
+
+async fn mock_streamable_http_server_with_delay(
+	stateful: bool,
+	delay: Option<std::time::Duration>,
+) -> MockServer {
+	mock_streamable_http_server_inner(stateful, None, delay).await
 }
 
 async fn mock_streamable_http_server_inner(
 	stateful: bool,
 	capture: Option<HeaderCapture>,
+	delay: Option<std::time::Duration>,
 ) -> MockServer {
 	use mockserver::Counter;
 	use rmcp::transport::streamable_http_server::StreamableHttpService;
@@ -1635,6 +1643,14 @@ async fn mock_streamable_http_server_inner(
 					cap.lock().unwrap().push(req.headers().clone());
 					next.run(req).await
 				}
+			},
+		));
+	}
+	if let Some(d) = delay {
+		router = router.layer(axum::middleware::from_fn(
+			move |req: axum::extract::Request, next: axum::middleware::Next| async move {
+				tokio::time::sleep(d).await;
+				next.run(req).await
 			},
 		));
 	}
@@ -5922,5 +5938,409 @@ mod adobe_mcp_apps_integration {
 			panic!("expected GetTaskResult");
 		};
 		assert_eq!(gtr.task.task_id, "a_job-99");
+	}
+}
+
+#[cfg(feature = "adobe")]
+mod histogram_tests {
+	use agent_core::strng;
+	use rmcp::model::CallToolRequestParams;
+	use serde_json::json;
+
+	use super::*;
+	use crate::test_helpers::adobe_proxymock::setup_with_registry;
+	use crate::test_helpers::proxymock::{BIND_KEY, basic_named_route, basic_route, simple_bind};
+
+	const HIST: &str = "agentgateway_mcp_request_duration_seconds";
+
+	/// I1 - single tools/call against a single-target MCP backend.
+	#[tokio::test]
+	async fn histogram_records_single_tools_call() {
+		let mock = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+		let client = mcp_streamable_client(io).await;
+
+		let _ = client
+			.call_tool(
+				CallToolRequestParams::new("echo")
+					.with_arguments(json!({"hi": "world"}).as_object().cloned().unwrap()),
+			)
+			.await
+			.unwrap();
+
+		let out = t.scrape_metrics();
+		assert!(
+			out.contains(&format!("{HIST}_count")),
+			"no `{HIST}_count` series emitted; got:\n{out}"
+		);
+		let any_nonzero_count = out
+			.lines()
+			.filter(|l| l.starts_with(&format!("{HIST}_count")))
+			.any(|l| !l.trim_end().ends_with(" 0"));
+		assert!(
+			any_nonzero_count,
+			"expected at least one nonzero `_count`; got:\n{out}"
+		);
+		let any_positive_sum = out
+			.lines()
+			.filter(|l| l.starts_with(&format!("{HIST}_sum")))
+			.any(|l| {
+				l.rsplit(' ')
+					.next()
+					.and_then(|n| n.parse::<f64>().ok())
+					.map(|n| n > 0.0)
+					.unwrap_or(false)
+			});
+		assert!(any_positive_sum, "expected positive `_sum`; got:\n{out}");
+	}
+
+	/// I2 - federated MCP backend; two servers must produce two distinct series.
+	/// This is the central story-validating test.
+	#[tokio::test]
+	async fn histogram_breaks_down_by_server_in_federation() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("server-a", mock_a.addr, false),
+					("server-b", mock_b.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_streamable_client(io).await;
+
+		let _ = client
+			.call_tool(
+				CallToolRequestParams::new("server-a_echo")
+					.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+			)
+			.await
+			.unwrap();
+		let _ = client
+			.call_tool(
+				CallToolRequestParams::new("server-b_echo")
+					.with_arguments(json!({"x": 2}).as_object().cloned().unwrap()),
+			)
+			.await
+			.unwrap();
+
+		let out = t.scrape_metrics();
+
+		assert!(
+			out
+				.lines()
+				.any(|l| l.starts_with(&format!("{HIST}_count{{")) && l.contains(r#"server="server-a""#)),
+			"no `server=\"server-a\"` _count line; got:\n{out}"
+		);
+		assert!(
+			out
+				.lines()
+				.any(|l| l.starts_with(&format!("{HIST}_count{{")) && l.contains(r#"server="server-b""#)),
+			"no `server=\"server-b\"` _count line; got:\n{out}"
+		);
+	}
+
+	/// I3 - protocol methods (initialize/tools/list/notifications/initialized) show up
+	/// with `server="unknown"`, matching the existing mcp_requests counter.
+	#[tokio::test]
+	async fn histogram_observes_non_tools_call_methods() {
+		let mock = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+		let client = mcp_streamable_client(io).await;
+
+		// `serve(transport)` already triggers `initialize` + `notifications/initialized`.
+		let _ = client.list_tools(None).await.unwrap();
+
+		let out = t.scrape_metrics();
+
+		let has_protocol_method = out
+			.lines()
+			.filter(|l| l.starts_with(&format!("{HIST}_count{{")))
+			.any(|l| {
+				l.contains(r#"server="unknown""#)
+					&& (l.contains(r#"method="initialize""#)
+						|| l.contains(r#"method="tools/list""#)
+						|| l.contains(r#"method="notifications/initialized""#))
+			});
+		assert!(
+			has_protocol_method,
+			"no protocol-method series with server=\"unknown\"; got:\n{out}"
+		);
+	}
+
+	/// I4 - opening an SSE stream without sending any JSON-RPC must NOT emit a histogram
+	/// series. Distinguishes the new histogram from the broader HTTP request_duration.
+	#[tokio::test]
+	async fn histogram_excludes_sse_bootstrap_get() {
+		use std::time::Duration;
+
+		let mock = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+
+		let url = format!("http://{io}/sse");
+		let req = ::http::Request::builder()
+			.method(::http::Method::GET)
+			.uri(url)
+			.header("accept", "text/event-stream")
+			.body(crate::http::Body::empty())
+			.unwrap();
+		let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+			.build_http::<crate::http::Body>();
+		let _ = tokio::time::timeout(Duration::from_secs(2), client.request(req)).await;
+		tokio::time::sleep(Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+		let any_nonzero_count = out
+			.lines()
+			.filter(|l| l.starts_with(&format!("{HIST}_count")))
+			.any(|l| !l.trim_end().ends_with(" 0"));
+		assert!(
+			!any_nonzero_count,
+			"SSE-bootstrap GET was observed by the MCP histogram; got:\n{out}"
+		);
+	}
+
+	/// I5 - when the upstream returns an error, the histogram still observes the call.
+	/// Validates analysis §5.3.
+	#[tokio::test]
+	async fn histogram_observes_upstream_error_latency() {
+		let dead: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(dead, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(dead));
+		let io = t.serve_real_listener(BIND_KEY).await;
+
+		// mcp_streamable_client panics internally when the upstream is refused at
+		// `initialize` time; spawn it as a separate task so the JoinError is swallowed
+		// without failing the test, while the gateway still logs the request and fires
+		// the histogram observation via DropOnLog.
+		let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+			let handle = tokio::task::spawn(async move {
+				let client = mcp_streamable_client(io).await;
+				let _ = client
+					.call_tool(
+						CallToolRequestParams::new("echo")
+							.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+					)
+					.await;
+			});
+			let _ = handle.await;
+		})
+		.await;
+
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+		let out = t.scrape_metrics();
+
+		let any_nonzero_count = out
+			.lines()
+			.filter(|l| l.starts_with(&format!("{HIST}_count")))
+			.any(|l| !l.trim_end().ends_with(" 0"));
+		assert!(
+			any_nonzero_count,
+			"upstream-error call was not observed by the histogram; got:\n{out}"
+		);
+	}
+
+	/// I6 - for the same MCPCall label set, `mcp_request_duration_seconds_count` must
+	/// match `mcp_requests_total`. Regression guard against the two call sites diverging.
+	#[tokio::test]
+	async fn histogram_count_matches_counter_for_same_label_set() {
+		let mock = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+		let client = mcp_streamable_client(io).await;
+
+		for _ in 0..5 {
+			let _ = client
+				.call_tool(
+					CallToolRequestParams::new("echo")
+						.with_arguments(json!({"hi": "world"}).as_object().cloned().unwrap()),
+				)
+				.await
+				.unwrap();
+		}
+
+		let out = t.scrape_metrics();
+
+		fn sum_lines(s: &str, prefix: &str) -> f64 {
+			s.lines()
+				.filter(|l| l.starts_with(prefix))
+				.filter_map(|l| l.rsplit(' ').next())
+				.filter_map(|n| n.parse::<f64>().ok())
+				.sum()
+		}
+
+		let hist_count = sum_lines(&out, &format!("{HIST}_count"));
+		let counter_total = sum_lines(&out, "agentgateway_mcp_requests_total");
+		assert!(
+			(hist_count - counter_total).abs() < f64::EPSILON,
+			"histogram _count ({hist_count}) != counter total ({counter_total}); got:\n{out}"
+		);
+		assert!(
+			hist_count >= 5.0,
+			"expected at least 5 observations, got {hist_count}"
+		);
+	}
+
+	/// I7 - one fast call + one slow call; the `le="0.01"` bucket holds 1, `le="0.5"` holds 2.
+	#[tokio::test]
+	async fn histogram_bucket_distribution_matches_observation() {
+		use std::time::Duration;
+
+		let fast = mock_streamable_http_server(true).await;
+		let slow = mock_streamable_http_server_with_delay(true, Some(Duration::from_millis(200))).await;
+
+		let t_fast = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(fast.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(fast.addr));
+		let io_fast = t_fast.serve_real_listener(BIND_KEY).await;
+		let c_fast = mcp_streamable_client(io_fast).await;
+		let _ = c_fast
+			.call_tool(
+				CallToolRequestParams::new("echo")
+					.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+			)
+			.await
+			.unwrap();
+
+		let t_slow = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(slow.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(slow.addr));
+		let io_slow = t_slow.serve_real_listener(BIND_KEY).await;
+		let c_slow = mcp_streamable_client(io_slow).await;
+		let _ = c_slow
+			.call_tool(
+				CallToolRequestParams::new("echo")
+					.with_arguments(json!({"x": 2}).as_object().cloned().unwrap()),
+			)
+			.await
+			.unwrap();
+
+		fn bucket(out: &str, le: &str) -> f64 {
+			out
+				.lines()
+				.find(|l| {
+					l.starts_with(&format!("{HIST}_bucket"))
+						&& l.contains(&format!(r#"le="{le}""#))
+						&& l.contains(r#"method="tools/call""#)
+				})
+				.and_then(|l| l.rsplit(' ').next())
+				.and_then(|n| n.parse::<f64>().ok())
+				.unwrap_or(0.0)
+		}
+
+		let out_fast = t_fast.scrape_metrics();
+		let out_slow = t_slow.scrape_metrics();
+		// Use le=0.05 (50ms) as the fast-call boundary; on slow CI machines a
+		// "fast" call can take 10–30ms, so the tighter le=0.01 (10ms) is
+		// unreliable.  The 200ms-delayed slow call is safely outside le=0.05.
+		assert!(
+			bucket(&out_fast, "0.05") >= 1.0,
+			"fast tools/call did not land in le=0.05; got:\n{out_fast}"
+		);
+		assert!(
+			bucket(&out_slow, "0.05") < 1.0,
+			"slow tools/call (200ms) unexpectedly landed in le=0.05; got:\n{out_slow}"
+		);
+		assert!(
+			bucket(&out_slow, "0.5") >= 1.0,
+			"slow tools/call did not land in le=0.5; got:\n{out_slow}"
+		);
+	}
+
+	/// I8 - the histogram carries the flattened RouteIdentifier (bind/gateway/listener/route/route_rule).
+	#[tokio::test]
+	async fn histogram_carries_full_route_identifier_labels() {
+		let mock = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+		let client = mcp_streamable_client(io).await;
+
+		let _ = client
+			.call_tool(
+				CallToolRequestParams::new("echo")
+					.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+			)
+			.await
+			.unwrap();
+
+		let out = t.scrape_metrics();
+
+		let line = out
+			.lines()
+			.find(|l| l.starts_with(&format!("{HIST}_count{{")))
+			.unwrap_or_else(|| panic!("no _count series; got:\n{out}"));
+
+		for key in ["bind=", "gateway=", "listener=", "route=", "route_rule="] {
+			assert!(
+				line.contains(key),
+				"label `{key}` missing from histogram series `{line}`"
+			);
+		}
+	}
+
+	/// I9 - a request that finalises with no MCP context attached must produce
+	/// neither `mcp_requests_total` nor `mcp_request_duration_seconds`.
+	#[tokio::test]
+	async fn histogram_silent_when_mcp_context_absent() {
+		use std::time::Duration;
+
+		let t = setup_with_registry("{}").unwrap().with_bind(simple_bind());
+		let io = t.serve_real_listener(BIND_KEY).await;
+
+		let req = ::http::Request::builder()
+			.method(::http::Method::GET)
+			.uri(format!("http://{io}/no-such-path"))
+			.body(crate::http::Body::empty())
+			.unwrap();
+		let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+			.build_http::<crate::http::Body>();
+		let _ = tokio::time::timeout(Duration::from_secs(2), client.request(req)).await;
+		tokio::time::sleep(Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+		assert!(
+			!out.contains("agentgateway_mcp_requests_total"),
+			"unexpected `mcp_requests_total` line; got:\n{out}"
+		);
+		assert!(
+			!out.contains("agentgateway_mcp_request_duration_seconds_count"),
+			"unexpected histogram `_count` line; got:\n{out}"
+		);
 	}
 }

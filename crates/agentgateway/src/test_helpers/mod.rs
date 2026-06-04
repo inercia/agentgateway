@@ -7,6 +7,8 @@ pub mod oteltracemock;
 mod policy;
 #[cfg(any(test, feature = "internal_benches"))]
 pub mod proxymock;
+#[cfg(all(test, feature = "adobe"))]
+pub mod adobe_proxymock;
 pub mod ratelimitmock;
 pub use common::MockInstance;
 #[cfg(any(test, feature = "internal_benches"))]
