@@ -48,3 +48,9 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 - **Flat federation routing (tools + tasks):** first-wins route indexes for `tools/call` and task RPCs; lazy internal `tools/list` / `tasks/list` refresh when an in-memory index is empty (multi-replica session resume).
 - **Flat catalog presentation:** `resourceNaming: Flat` applies to federated `resources/list`, `resources/templates/list`, and `tasks/list` (not only tools/prompts); exposed names omit on collision; resource URIs / `uriTemplate` stay multiplex-wrapped for `resources/read` and MCP Apps.
 - **Implementation layout:** task outbound rewrap in `multiplex_naming`, Adobe task dispatch in `session/tasks.rs`, `federation_outbound::map_mux_outbound_message` for shared stream mapping.
+
+## 1.2.2
+
+- **Prometheus histogram `mcp_request_duration_seconds`:** records MCP request latency with `method` and `status` labels; exposed on the existing `/metrics` scrape endpoint (`#[cfg(feature = "adobe")]`).
+- Build: architecture suffix in `adobe/Makefile` now extracted from the `PLATFORM` variable instead of being hard-coded, fixing cross-arch snapshot builds.
+- Dev: local environment setup docs moved to a separate file (`.devcontainer` workflow); minor fork-friendliness refactors.

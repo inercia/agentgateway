@@ -1182,6 +1182,19 @@ impl Drop for DropOnLog {
 						custom: custom_metric_fields.clone(),
 					})
 					.inc();
+
+				#[cfg(feature = "adobe")]
+				{
+					let adobe_call = MCPCall {
+						method: mcp.method_name.as_ref().map(RichStrng::from).into(),
+						resource_type: mcp.resource_type().into(),
+						server: mcp.target_name().map(RichStrng::from).into(),
+						resource: mcp.resource_name().map(RichStrng::from).into(),
+						route: route_identifier.clone(),
+						custom: custom_metric_fields.clone(),
+					};
+					crate::metrics::adobe_metrics::record_mcp_call(&log.metrics, &adobe_call, duration);
+				}
 			}
 
 			let maybe_enable_log = agent_core::telemetry::enabled("request", &Level::INFO);
