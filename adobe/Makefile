@@ -13,9 +13,9 @@ BUILD_CACHE_DIR ?= $(HOME)/.cache/agentgateway-buildx
 # docker-container driver is required for --cache-to; Docker Desktop default is "docker".
 BUILDX_BUILDER_NAME ?= agentgateway-builder
 # Resolve upstream version from tags. Only consider upstream semver tags
-# (`v*`) so that local Adobe release tags (`adobe-*`) do not get picked up
-# by `git describe`. If git describe fails to find a tag, fetch tags from
-# the public repo and retry exactly once.
+# (`v*`) so that local Adobe release tags (`agw-*`, `api/*`) do not get
+# picked up by `git describe`. If git describe fails to find a tag, fetch
+# tags from the public repo and retry exactly once.
 UPSTREAM_VERSION ?= $(shell \
 	v=$$(git describe --tags --match 'v*' --always --dirty 2>/dev/null); \
 	if echo "$$v" | grep -q '^v'; then echo "$$v"; else \
@@ -106,3 +106,77 @@ print-snapshot-image: check-version
 
 print-release-image: check-version
 	@echo $(RELEASE_IMAGE)
+
+# --- Release tags (both derived from adobe/version) ---
+TAG_REF      ?= HEAD
+PUSH         ?= 1
+RELEASE      ?= 1
+RELEASE_REPO ?= Adobe-Apis/agentgateway
+CHANGELOG    := $(ADOBE_DIR)CHANGELOG.md
+# Strip stray GITHUB_TOKEN/GH_TOKEN so gh uses keyring / GHEC login (see sync skill).
+GH           ?= env -u GITHUB_TOKEN -u GH_TOKEN gh
+API_TAG      := api/v$(ADOBE_VERSION)
+GATEWAY_TAG   = agw-$(UPSTREAM_VERSION)-adobe-$(ADOBE_VERSION)
+
+.PHONY: print-release-tags cut-release-tags create-release print-release-notes
+
+print-release-tags: check-version
+	@echo "$(GATEWAY_TAG)"
+	@echo "$(API_TAG)"
+
+print-release-notes: check-version
+	@awk -v ver="$(ADOBE_VERSION)" 'BEGIN{f=0} $$0=="## " ver{f=1;next} /^## /&&f{f=0} f{print}' "$(CHANGELOG)"
+	@prev=$$(git tag --list 'agw-*' --sort=-creatordate | grep -vxF "$(GATEWAY_TAG)" | head -n1); \
+	if [ -n "$$prev" ]; then printf '\n**Full Changelog**: https://github.com/$(RELEASE_REPO)/compare/%s...%s\n' "$$prev" "$(GATEWAY_TAG)"; fi
+
+create-release: check-version
+	@command -v $(firstword $(GH)) >/dev/null 2>&1 || { echo "ERROR: gh CLI not found." >&2; exit 1; }
+	@git ls-remote --exit-code --tags origin "refs/tags/$(GATEWAY_TAG)" >/dev/null 2>&1 || { \
+		echo "ERROR: $(GATEWAY_TAG) is not on origin; push it before creating a release." >&2; exit 1; }
+	@if $(GH) release view "$(GATEWAY_TAG)" --repo "$(RELEASE_REPO)" >/dev/null 2>&1; then \
+		echo "Skipping GitHub release $(GATEWAY_TAG) (already exists)."; exit 0; fi
+	@section=$$(awk -v ver="$(ADOBE_VERSION)" 'BEGIN{f=0} $$0=="## " ver{f=1;next} /^## /&&f{f=0} f{print}' "$(CHANGELOG)"); \
+	if [ -z "$$(printf '%s' "$$section" | tr -d '[:space:]')" ]; then \
+		echo "ERROR: no '## $(ADOBE_VERSION)' section in $(CHANGELOG)." >&2; exit 1; fi; \
+	notes=$$(mktemp); printf '%s\n' "$$section" > "$$notes"; \
+	prev=$$(git tag --list 'agw-*' --sort=-creatordate | grep -vxF "$(GATEWAY_TAG)" | head -n1); \
+	if [ -n "$$prev" ]; then printf '\n**Full Changelog**: https://github.com/$(RELEASE_REPO)/compare/%s...%s\n' "$$prev" "$(GATEWAY_TAG)" >> "$$notes"; fi; \
+	$(GH) release create "$(GATEWAY_TAG)" --repo "$(RELEASE_REPO)" --title "$(GATEWAY_TAG)" --notes-file "$$notes"; \
+	rc=$$?; rm -f "$$notes"; \
+	if [ $$rc -eq 0 ]; then echo "Created GitHub release $(GATEWAY_TAG)."; fi; \
+	exit $$rc
+
+cut-release-tags: check-version
+	@case "$(ADOBE_VERSION)" in \
+		[0-9]*.[0-9]*.[0-9]*) ;; \
+		*) echo "ERROR: adobe/version '$(ADOBE_VERSION)' is not X.Y.Z semver." >&2; exit 1 ;; \
+	esac
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "ERROR: working tree dirty; commit or stash before tagging." >&2; exit 1; fi
+	@set -e; \
+	tags_to_push=; \
+	for t in "$(GATEWAY_TAG)" "$(API_TAG)"; do \
+		if git ls-remote --exit-code --tags origin "refs/tags/$$t" >/dev/null 2>&1; then \
+			echo "Skipping $$t (already on origin)."; \
+		elif git rev-parse -q --verify "refs/tags/$$t" >/dev/null 2>&1; then \
+			echo "Skipping create $$t (exists locally); will push."; \
+			tags_to_push="$$tags_to_push $$t"; \
+		else \
+			case "$$t" in api/*) msg="agentgateway api $$t";; *) msg="agentgateway $$t";; esac; \
+			git tag -a "$$t" $(TAG_REF) -m "$$msg"; \
+			echo "Created $$t at $(TAG_REF)."; \
+			tags_to_push="$$tags_to_push $$t"; \
+		fi; \
+	done; \
+	if [ "$(PUSH)" = "1" ]; then \
+		if [ -n "$$tags_to_push" ]; then \
+			git push origin $$tags_to_push && echo "Pushed:$$tags_to_push"; \
+		else echo "No new tags to push."; fi; \
+		if [ "$(RELEASE)" = "1" ]; then $(MAKE) --no-print-directory create-release; \
+		else echo "RELEASE=0 set; GitHub release skipped."; fi; \
+	else \
+		if [ -n "$$tags_to_push" ]; then \
+			echo "PUSH=0 set; push later: git push origin$$tags_to_push"; \
+		else echo "PUSH=0 set; all tags already exist on origin."; fi; \
+		echo "(GitHub release skipped; after pushing run: make -C adobe create-release)"; \
+	fi

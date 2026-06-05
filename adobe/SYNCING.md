@@ -147,13 +147,14 @@ inspect, fix, and re-run.
 To avoid surprise interactions with the release pipeline:
 
 - **Sync PRs do not bump `adobe/version` or `adobe/CHANGELOG.md`.**
-  Releases are author-driven and CI-tagged on merge — see
+  Releases are author-driven — see
   [`CONTRIBUTING.md`](CONTRIBUTING.md#releases). A sync PR landing on
-  `adobe` is a regular merge as far as CI is concerned; if it doesn't
-  change `adobe/version`, no tag is cut.
-- **Sync PRs do not create `adobe-*` tags.** Only the release pipeline
-  does. Upstream `v*` tags arrive via `make -C adobe fetch-tags` and
-  are never re-tagged or renamed by the sync skill.
+  `adobe` is a regular merge; if it doesn't change `adobe/version`, no
+  release tags are cut.
+- **Sync PRs do not create `agw-*` or `api/*` release tags.** Only a
+  release (via `make -C adobe cut-release-tags`) does. Upstream `v*`
+  tags arrive via `make -C adobe fetch-tags` and are never re-tagged or
+  renamed by the sync skill.
 - **Syncing is one-way.** Changes flow upstream → `adobe`. If you've
   authored an Adobe patch that should be sent upstream too, open a
   separate PR against `agentgateway/agentgateway` — the sync flow is
