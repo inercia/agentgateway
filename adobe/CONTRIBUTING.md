@@ -31,9 +31,11 @@ public project's review process.
   verbatim SHAs, Adobe commits stack on top. See
   [`../.claude/skills/agentgateway-sync/references/merge-strategies.md`](../.claude/skills/agentgateway-sync/references/merge-strategies.md)
   for the rationale.
-- Keep PRs small and focused. If a change is large enough to want
-  multiple commits, prefer `Rebase and merge` or `Create a merge commit`
-  over `Squash and merge` so per-commit attribution survives.
+- Keep PRs small and focused. Prefer **Squash and merge** so each PR
+  lands as one `adobe:` commit on top of the upstream base. Per-commit
+  history on the feature branch is disposable; the fork's linear shape
+  (verbatim upstream SHAs + Adobe commits on top) is maintained by the
+  sync skill, not by how feature PRs are merged.
 
 ## Code conventions
 
@@ -70,52 +72,106 @@ numbers as `(#N)` when relevant. Wrap bodies at 72–80 characters.
 
 ## Releases
 
-Releases are author-driven and CI-automated. The PR author cuts the
-release; CI tags it on merge.
+Releases are author-driven and cut manually (there is no release CI on the
+fork yet). When your PR ships a release:
 
-1. **When your PR is the one that ships a release**, bump
-   `adobe/version` to the new `X.Y.Z` and append a `## X.Y.Z` section to
-   `adobe/CHANGELOG.md` with the relevant bullets. Use the
-   `changelog-entry` skill to draft the bullets.
-2. **Don't tag manually.** When the PR merges into `adobe`, CI tags the
-   merge commit `adobe-X.Y.Z` (annotated) and publishes a GitHub
-   release. The Docker image is published as
+1. **Bump the fork version.** Update `adobe/version` to the new `X.Y.Z`
+   and append a `## X.Y.Z` section to `adobe/CHANGELOG.md` with the
+   relevant bullets. Use the `changelog-entry` skill to draft the bullets.
+2. **Merge into `adobe`**, then build and publish the Docker image (see
+   below). The image tag is
    `…/agentgateway:vUPSTREAM-N-gSHA-adobe-X.Y.Z-amd64`.
-3. **Non-release PRs leave `adobe/version` and `adobe/CHANGELOG.md`
+3. **Cut release tags and publish a GitHub Release** on the release commit
+   (clean working tree). Requires `gh` authenticated against
+   `Adobe-Apis/agentgateway` with SSO authorized (`gh auth login`, or a
+   GHEC token). The Makefile strips stray `GITHUB_TOKEN`/`GH_TOKEN` from
+   the environment automatically so `gh` uses your keyring login.
+
+   ```bash
+   make -C adobe cut-release-tags
+   ```
+
+   This creates and pushes two annotated tags at `HEAD`, then publishes a
+   [GitHub Release](https://github.com/Adobe-Apis/agentgateway/releases)
+   on the gateway tag:
+
+   - `agw-<upstream-describe>-adobe-X.Y.Z` — gateway release tag (mirrors
+     the docker image tag minus `-amd64`); gets the GitHub Release page
+   - `api/vX.Y.Z` — Go module tag for
+     `github.com/Adobe-Apis/agentgateway/api` (consumed by agentlink via
+     `go get …/api@api/vX.Y.Z`)
+
+   The release body is the curated `## X.Y.Z` section from
+   `adobe/CHANGELOG.md`, plus a **Full Changelog** compare link to the
+   previous `agw-*` release when one exists. Tags that already exist on
+   `origin` are skipped (e.g. `api/vX.Y.Z` when the Go module types did
+   not change since the last release). The GitHub Release is also skipped
+   if one already exists for the gateway tag.
+
+   Preview tag names with `make -C adobe print-release-tags` or the
+   release body with `make -C adobe print-release-notes`. To create tags
+   locally without pushing, use `PUSH=0 make -C adobe cut-release-tags`.
+   To skip the GitHub Release while still pushing tags, use
+   `RELEASE=0 make -C adobe cut-release-tags`. If tags are already on
+   origin but the release failed, re-run `make -C adobe create-release`.
+
+4. **Non-release PRs leave `adobe/version` and `adobe/CHANGELOG.md`
    alone.** Mid-cycle PRs (bug fixes, refactors, infra) don't bump the
    version. Only the PR that's "the release" does.
 
-### Invariants (CI enforces these)
+### Release invariants
 
-At any commit on `adobe`:
+Conventions the release cutter should follow (future CI, if added, should
+enforce these):
 
 - `cat adobe/version` equals the most recent `## X.Y.Z` heading in
   `adobe/CHANGELOG.md`.
-- For every `## X.Y.Z` heading, there is a corresponding annotated git
-  tag `adobe-X.Y.Z`.
-- Each `adobe-X.Y.Z` tag points at a commit where `cat adobe/version`
-  returns `X.Y.Z`.
+- For every `## X.Y.Z` heading, there is a corresponding annotated
+  gateway tag `agw-<upstream-describe>-adobe-X.Y.Z` and Go module tag
+  `api/vX.Y.Z` (the upstream-describe prefix is dynamic and not recorded
+  in the CHANGELOG).
+- Each release tag points at a commit where `cat adobe/version` returns
+  `X.Y.Z`.
+- Treat all release tags as immutable — never move or delete them.
 
 ### Tag scheme
 
-- Adobe releases use `adobe-X.Y.Z` annotated tags.
-- Upstream `v*` tags are preserved verbatim from `public/main`; never
-  re-tag or rename them.
+All release artifacts derive from the single fork version in
+`adobe/version`:
+
+```mermaid
+flowchart LR
+  advfile["adobe/version (fork version)"] --> dockertag["docker: v1.2.1-13-gSHA-adobe-1.2.1-amd64"]
+  advfile --> gwtag["agw-v1.2.1-13-gSHA-adobe-1.2.1 (gateway)"]
+  advfile --> apitag["api/vX.Y.Z (Go module)"]
+  apitag --> consumer["agentlink go.mod pins .../api@api/vX.Y.Z"]
+```
+
+- **Gateway releases** use `agw-<upstream-describe>-adobe-X.Y.Z`
+  annotated tags (e.g. `agw-v1.2.1-13-g321e5485-adobe-1.2.1`). The
+  `agw-` prefix keeps these inert against the upstream
+  `.github/workflows/release.yml` trigger (`v*.*.*`) and against
+  `git describe --match 'v*'`.
+- **Go module releases** use `api/vX.Y.Z` annotated tags for the
+  `github.com/Adobe-Apis/agentgateway/api` submodule (subdir-prefixed
+  per Go module rules).
+- **Upstream `v*` tags** are preserved verbatim from `public/main`;
+  never re-tag or rename them.
 - `adobe/Makefile` derives `UPSTREAM_VERSION` from `git describe --match
-  'v*'`, so adding Adobe tags never disturbs the upstream-version
-  lookup.
+  'v*'`, so adding `agw-*` or `api/*` tags never disturbs the
+  upstream-version lookup.
 
 ## Pull request expectations
 
 - PRs target `adobe`.
-- CI runs the upstream test matrix plus Adobe-specific checks (including
-  the release invariants above when `adobe/version` or
-  `adobe/CHANGELOG.md` changes).
+- CI runs the upstream test matrix plus Adobe-specific checks when
+  `adobe/version` or `adobe/CHANGELOG.md` changes.
 - Reviews require at least one approval from the Ethos Gateway team.
   Changes touching protected files (`jwt.rs`, `mcp/sse.rs`, `adobe/`)
   may need a second reviewer at the team's discretion.
-- After approval, the PR author (or a maintainer) merges. The release
-  pipeline runs automatically if the merge bumps `adobe/version`.
+- After approval, the PR author (or a maintainer) merges. If the merge
+  bumps `adobe/version`, cut release tags with `make -C adobe
+  cut-release-tags` after publishing the docker image.
 
 ## Upstream sync (separate workflow)
 
