@@ -11,10 +11,10 @@ use http::request::Parts;
 use itertools::Itertools;
 use rmcp::ErrorData;
 use rmcp::model::{
-	ClientNotification, ClientRequest, Implementation, JsonRpcNotification, JsonRpcRequest,
-	ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsRequest,
-	ListToolsResult, ProtocolVersion, RequestId, ServerCapabilities, ServerInfo, ServerJsonRpcMessage,
-	ServerNotification, ServerResult,
+	ClientJsonRpcMessage, ClientNotification, ClientRequest, Implementation, JsonRpcNotification,
+	JsonRpcRequest, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+	ListToolsRequest, ListToolsResult, ProtocolVersion, RequestId, ServerCapabilities, ServerInfo,
+	ServerJsonRpcMessage, ServerNotification, ServerResult,
 };
 use tracing::{debug, warn};
 
@@ -224,7 +224,6 @@ impl Relay {
 			return;
 		}
 		routes.insert(exposed, (target.to_string(), upstream_id.to_string()));
-	}
 	}
 
 	pub fn parse_resource_name<'a, 'b: 'a>(
@@ -854,11 +853,29 @@ impl Relay {
 		let stream =
 			self.rewrite_outbound_server_messages(service_name, us.generic_stream(r, &ctx).await?);
 
-		match guardrails {
-			Some(guardrails) => {
-				messages_to_response(id, wrap_with_guardrails(stream, guardrails), mcp_log)
-			},
-			None => messages_to_response(id, stream, mcp_log),
+		#[cfg(feature = "adobe")]
+		{
+			// Guardrails (decision 2) wrap the stream first; the adobe build then applies
+			// federated multiplex outbound rewriting via messages_to_response_mapped.
+			let default_mux = self.upstreams.default_target_name.clone();
+			let flat = self.mcp_rewrite.flat();
+			let tn = service_name.to_string();
+			let map = crate::mcp::federation_outbound::map_mux_outbound_message(default_mux, flat, tn);
+			return match guardrails {
+				Some(guardrails) => {
+					messages_to_response_mapped(id, wrap_with_guardrails(stream, guardrails), mcp_log, map)
+				},
+				None => messages_to_response_mapped(id, stream, mcp_log, map),
+			};
+		}
+		#[cfg(not(feature = "adobe"))]
+		{
+			match guardrails {
+				Some(guardrails) => {
+					messages_to_response(id, wrap_with_guardrails(stream, guardrails), mcp_log)
+				},
+				None => messages_to_response(id, stream, mcp_log),
+			}
 		}
 	}
 	pub async fn send_fanout_deletion(
@@ -1091,6 +1108,33 @@ impl Relay {
 		messages_to_response_mapped(id, stream, mcp_log, map_msg)
 	}
 
+	#[cfg(feature = "adobe")]
+	pub async fn send_single_map_response_cancellable<F>(
+		&self,
+		r: JsonRpcRequest<ClientRequest>,
+		ctx: IncomingRequestContext,
+		service_name: &str,
+		map_msg: F,
+		mcp_log: Option<AsyncLog<MCPInfo>>,
+		in_flight: crate::mcp::session::InFlightRegistry,
+	) -> Result<Response, UpstreamError>
+	where
+		F: FnMut(&mut ServerJsonRpcMessage) + Send + 'static,
+	{
+		let id = r.id.clone();
+		let Ok(us) = self.upstreams.get(service_name) else {
+			return Err(UpstreamError::InvalidRequest(format!(
+				"unknown service {service_name}"
+			)));
+		};
+		let stream = us
+			.generic_stream(r, &ctx)
+			.await?
+			.register_cancellable(in_flight, id.clone(), service_name.to_string());
+
+		messages_to_response_mapped(id, stream, mcp_log, map_msg)
+	}
+
 	pub async fn send_notification(
 		&self,
 		r: JsonRpcNotification<ClientNotification>,
@@ -1139,6 +1183,23 @@ impl Relay {
 			)));
 		};
 		us.generic_notification(r, &ctx).await?;
+		Ok(accepted_response())
+	}
+
+	/// Forward a client-originated JSON-RPC message (response/error) to one upstream target.
+	#[cfg(feature = "adobe")]
+	pub async fn send_message_single(
+		&self,
+		message: ClientJsonRpcMessage,
+		ctx: IncomingRequestContext,
+		service_name: &str,
+	) -> Result<Response, UpstreamError> {
+		let Ok(us) = self.upstreams.get(service_name) else {
+			return Err(UpstreamError::InvalidRequest(format!(
+				"unknown service {service_name}"
+			)));
+		};
+		us.generic_client_message(message, &ctx).await?;
 		Ok(accepted_response())
 	}
 

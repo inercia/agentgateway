@@ -239,11 +239,65 @@ pub use task_outbound::{
 	rewrap_create_task_id, rewrap_outbound_task_id, rewrap_server_result_task_ids,
 };
 
+/// Encode upstream target into JSON-RPC request ids for server->client requests (multiplexing).
+///
+/// The client echoes the id verbatim in its response; decoding routes the reply to the correct
+/// upstream without shared gateway state.
+///
+/// The embedded target name is client-echoed and only used to select a configured upstream via
+/// [`UpstreamGroup::get`]. We intentionally do not validate that a request is still pending:
+/// unknown ids are ignored by the upstream, and omitting shared pending state keeps routing
+/// replica-safe across horizontally scaled gateways.
+#[cfg(feature = "adobe")]
+pub mod server_request_id {
+	use rmcp::model::{NumberOrString, RequestId};
+
+	const PREFIX: &str = "mcpgw";
+	const SEP: char = '\u{1f}';
+
+	/// Wrap an upstream JSON-RPC request id for the federated client.
+	pub fn wrap_server_request_id(target: &str, id: &RequestId) -> RequestId {
+		let (tag, payload) = match id {
+			NumberOrString::Number(n) => ("N", n.to_string()),
+			NumberOrString::String(s) => ("S", s.to_string()),
+		};
+		let encoded = format!("{PREFIX}{SEP}{target}{SEP}{tag}{SEP}{payload}");
+		RequestId::String(encoded.into())
+	}
+
+	/// Parse a wrapped client-visible id back to `(target, upstream_id)`.
+	pub fn unwrap_server_request_id(id: &RequestId) -> Option<(String, RequestId)> {
+		let NumberOrString::String(s) = id else {
+			return None;
+		};
+		let mut parts = s.splitn(4, SEP);
+		if parts.next()? != PREFIX {
+			return None;
+		}
+		let target = parts.next()?.to_string();
+		let tag = parts.next()?;
+		let payload = parts.next()?;
+		let orig = match tag {
+			"N" => RequestId::Number(payload.parse().ok()?),
+			"S" => RequestId::String(payload.into()),
+			_ => return None,
+		};
+		Some((target, orig))
+	}
+}
+
+#[cfg(feature = "adobe")]
+pub use server_request_id::{unwrap_server_request_id, wrap_server_request_id};
+
 #[cfg(test)]
 mod tests {
 	use super::{
 		parse_resource_name, resolve_client_task_id, unwrap_client_task_id, wrap_client_task_id,
 	};
+	#[cfg(feature = "adobe")]
+	use super::server_request_id::{unwrap_server_request_id, wrap_server_request_id};
+	#[cfg(feature = "adobe")]
+	use rmcp::model::RequestId;
 	use crate::mcp::upstream::UpstreamError;
 
 	#[test]
@@ -295,5 +349,32 @@ mod tests {
 		let (t, id) = resolve_client_task_id(None, "job-42", 1, Some("svc")).unwrap();
 		assert_eq!(t, "svc");
 		assert_eq!(id, "job-42");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn wrap_and_unwrap_server_request_id_number() {
+		let wrapped = wrap_server_request_id("mcp-server-everything", &RequestId::Number(42));
+		let (target, orig) = unwrap_server_request_id(&wrapped).unwrap();
+		assert_eq!(target, "mcp-server-everything");
+		assert_eq!(orig, RequestId::Number(42));
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn wrap_and_unwrap_server_request_id_string() {
+		let wrapped = wrap_server_request_id(
+			"mcp-server-airbnb",
+			&RequestId::String("upstream-id".into()),
+		);
+		let (target, orig) = unwrap_server_request_id(&wrapped).unwrap();
+		assert_eq!(target, "mcp-server-airbnb");
+		assert_eq!(orig, RequestId::String("upstream-id".into()));
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn unwrap_server_request_id_rejects_plain_number() {
+		assert!(unwrap_server_request_id(&RequestId::Number(1)).is_none());
 	}
 }

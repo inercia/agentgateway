@@ -1,3 +1,6 @@
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use anyhow::anyhow;
 use futures_core::Stream;
 use futures_core::stream::BoxStream;
@@ -10,6 +13,44 @@ use crate::mcp::rbac::CelExecWrapper;
 use crate::mcp::streamablehttp::StreamableHttpPostResponse;
 use crate::mcp::{ClientError, FailureMode};
 use crate::*;
+
+#[cfg(feature = "adobe")]
+type InFlightEntry = (
+	futures::stream::AbortHandle,
+	String,
+);
+
+#[cfg(feature = "adobe")]
+struct InFlightGuard {
+	registry: std::sync::Arc<
+		std::sync::Mutex<std::collections::HashMap<RequestId, InFlightEntry>>,
+	>,
+	request_id: RequestId,
+}
+
+#[cfg(feature = "adobe")]
+impl Drop for InFlightGuard {
+	fn drop(&mut self) {
+		if let Ok(mut map) = self.registry.lock() {
+			map.remove(&self.request_id);
+		}
+	}
+}
+
+#[cfg(feature = "adobe")]
+struct CancellableMessages {
+	inner: futures::stream::Abortable<Messages>,
+	_guard: InFlightGuard,
+}
+
+#[cfg(feature = "adobe")]
+impl Stream for CancellableMessages {
+	type Item = Result<ServerJsonRpcMessage, ClientError>;
+
+	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		Pin::new(&mut self.inner).poll_next(cx)
+	}
+}
 
 pub(crate) struct Messages(BoxStream<'static, Result<ServerJsonRpcMessage, ClientError>>);
 
@@ -60,6 +101,35 @@ impl Messages {
 					Err(err) => Err(err),
 				})
 				.boxed(),
+		)
+	}
+}
+
+#[cfg(feature = "adobe")]
+impl Messages {
+	/// Wrap a stream so it can be aborted when the downstream client cancels the request.
+	pub fn register_cancellable(
+		self,
+		registry: crate::mcp::session::InFlightRegistry,
+		request_id: RequestId,
+		target: String,
+	) -> Self {
+		let (abortable, abort_handle) = futures::stream::abortable(self);
+		if let Ok(mut map) = registry.lock() {
+			map.insert(request_id.clone(), (abort_handle, target));
+		}
+		let registry_cleanup = registry.clone();
+		let cleanup_id = request_id;
+
+		Messages(
+			CancellableMessages {
+				inner: abortable,
+				_guard: InFlightGuard {
+					registry: registry_cleanup,
+					request_id: cleanup_id,
+				},
+			}
+			.boxed(),
 		)
 	}
 }

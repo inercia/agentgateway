@@ -1,6 +1,5 @@
 use ::http::Uri;
 use ::http::header::{ACCEPT, CONTENT_TYPE};
-use anyhow::anyhow;
 use futures::StreamExt;
 use headers::HeaderMapExt;
 use rmcp::model::{
@@ -18,7 +17,7 @@ use crate::mcp::streamablehttp::StreamableHttpPostResponse;
 use crate::mcp::upstream::IncomingRequestContext;
 use crate::*;
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct Client {
 	http_client: super::McpHttpClient,
 	uri: Uri,
@@ -72,6 +71,14 @@ impl Client {
 		ctx: &IncomingRequestContext,
 	) -> Result<StreamableHttpPostResponse, ClientError> {
 		let message = ClientJsonRpcMessage::notification(req);
+		self.send_message(message, ctx).await
+	}
+	#[cfg(feature = "adobe")]
+	pub async fn send_client_message(
+		&self,
+		message: ClientJsonRpcMessage,
+		ctx: &IncomingRequestContext,
+	) -> Result<StreamableHttpPostResponse, ClientError> {
 		self.send_message(message, ctx).await
 	}
 	async fn send_message(
@@ -140,7 +147,7 @@ impl Client {
 					None => Ok(StreamableHttpPostResponse::Accepted),
 				}
 			},
-			_ => Err(ClientError::new(anyhow!(
+			_ => Err(ClientError::new(anyhow::anyhow!(
 				"unexpected content type: {:?}",
 				content_type
 			))),
@@ -166,6 +173,7 @@ impl Client {
 		if !resp.status().is_success() {
 			return Err(ClientError::Status(Box::new(resp)));
 		}
+		self.session_id.store(None);
 		Ok(StreamableHttpPostResponse::Accepted)
 	}
 	pub async fn get_event_stream(
@@ -204,7 +212,7 @@ impl Client {
 				let event_stream = SseStream::from_byte_stream(body.into_data_stream()).boxed();
 				Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
 			},
-			_ => Err(ClientError::new(anyhow!(
+			_ => Err(ClientError::new(anyhow::anyhow!(
 				"unexpected content type for GET streams: {:?}",
 				content_type
 			))),
