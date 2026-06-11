@@ -8,10 +8,12 @@ use std::io;
 
 pub(crate) use client::McpHttpClient;
 pub use openapi::ParseError as OpenAPIParseError;
-use rmcp::model::{ClientNotification, ClientRequest, JsonRpcRequest};
+use rmcp::model::{ClientJsonRpcMessage, ClientNotification, ClientRequest, JsonRpcRequest};
 use rmcp::transport::TokioChildProcess;
 use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use thiserror::Error;
+#[cfg(feature = "adobe")]
+use tracing::warn;
 use tokio::process::Command;
 
 use crate::mcp::mergestream::Messages;
@@ -103,6 +105,21 @@ impl IncomingRequestContext {
 		*req.headers_mut() = self.headers.clone();
 		*req.extensions_mut() = self.ext.clone();
 		req
+	}
+
+	/// Strip client-visible session headers before forwarding to an upstream that
+	/// already has its own per-target `mcp-session-id` on the outbound client.
+	#[cfg(feature = "adobe")]
+	pub fn for_upstream_client_message(&self) -> Self {
+		let mut headers = self.headers.clone();
+		headers.remove(HEADER_SESSION_ID);
+		Self {
+			method: self.method.clone(),
+			uri: self.uri.clone(),
+			headers,
+			ext: self.ext.clone(),
+			authority: self.authority.clone(),
+		}
 	}
 	pub fn headers(&self) -> &http::HeaderMap {
 		&self.headers
@@ -231,7 +248,7 @@ impl Upstream {
 					};
 					c.set_session_id(sid.map(|s| s.as_str()), None);
 				}
-				res.try_into().map_err(Into::into)
+				res.try_into().map_err(UpstreamError::Http)
 			},
 			Upstream::OpenAPI(c) => Ok(c.send_message(request, ctx).await?),
 		}
@@ -255,6 +272,35 @@ impl Upstream {
 			Upstream::OpenAPI(_) => {},
 		}
 		Ok(())
+	}
+
+	#[cfg(feature = "adobe")]
+	pub(crate) async fn generic_client_message(
+		&self,
+		message: ClientJsonRpcMessage,
+		ctx: &IncomingRequestContext,
+	) -> Result<(), UpstreamError> {
+		let ctx = ctx.for_upstream_client_message();
+		match &self {
+			Upstream::McpStdio(c) => c.send_client_message(message, &ctx).await,
+			Upstream::McpSSE(c) => c.send_client_message(message, &ctx).await,
+			Upstream::McpStreamable(c) => {
+				// Client JSON-RPC responses/errors are expected to be 202 Accepted only.
+				match c.send_client_message(message, &ctx).await? {
+					crate::mcp::streamablehttp::StreamableHttpPostResponse::Accepted => Ok(()),
+					other => {
+						warn!(
+							?other,
+							"unexpected streamable HTTP body for client response; expected Accepted"
+						);
+						Ok(())
+					},
+				}
+			},
+			Upstream::OpenAPI(_) => Err(UpstreamError::InvalidRequest(
+				"upstream does not accept client messages".to_string(),
+			)),
+		}
 	}
 }
 

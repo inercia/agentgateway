@@ -245,6 +245,19 @@ impl Client {
 		let stream = self.get_stream(ctx).await?;
 		stream.send_notification(req, ctx).await
 	}
+
+	#[cfg(feature = "adobe")]
+	pub async fn send_client_message(
+		&self,
+		message: ClientJsonRpcMessage,
+		ctx: &IncomingRequestContext,
+	) -> Result<(), UpstreamError> {
+		self
+			.client
+			.send_message(message, ctx)
+			.await
+			.map_err(Into::into)
+	}
 }
 
 fn message_endpoint(base: Uri, endpoint: String) -> Result<Uri, http::uri::InvalidUri> {

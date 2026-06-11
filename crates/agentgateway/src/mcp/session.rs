@@ -24,6 +24,8 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use crate::http::Response;
 #[cfg(feature = "adobe")]
 use crate::mcp::federation_outbound::map_mux_outbound_message;
+#[cfg(feature = "adobe")]
+use crate::mcp::multiplex_naming::unwrap_server_request_id;
 use crate::mcp::handler::{Relay, RelayInputs};
 use crate::mcp::mergestream::Messages;
 use crate::mcp::streamablehttp::{ServerSseMessage, StreamableHttpPostResponse};
@@ -36,12 +38,24 @@ use crate::{mcp, *};
 #[cfg(feature = "adobe")]
 mod tasks;
 
+#[cfg(feature = "adobe")]
+pub(crate) type InFlightRegistry = Arc<
+	std::sync::Mutex<HashMap<RequestId, (futures::stream::AbortHandle, String)>>,
+>;
+
 #[derive(Debug, Clone)]
 pub struct Session {
 	encoder: http::sessionpersistence::Encoder,
 	relay: Arc<Relay>,
 	pub id: Arc<str>,
 	tx: Option<Sender<ServerJsonRpcMessage>>,
+	#[cfg(feature = "adobe")]
+	in_flight: InFlightRegistry,
+}
+
+#[cfg(feature = "adobe")]
+fn new_in_flight_registry() -> InFlightRegistry {
+	Arc::new(std::sync::Mutex::new(HashMap::new()))
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +71,14 @@ impl Session {
 	#[cfg(feature = "adobe")]
 	pub(super) fn relay(&self) -> &Relay {
 		self.relay.as_ref()
+	}
+
+	#[cfg(feature = "adobe")]
+	fn cancel_in_flight(&self, request_id: &RequestId) -> Option<String> {
+		let mut map = self.in_flight.lock().ok()?;
+		let (handle, target) = map.remove(request_id)?;
+		handle.abort();
+		Some(target)
 	}
 
 	/// send a message to upstream server(s)
@@ -515,6 +537,61 @@ impl Session {
 			.await
 	}
 
+	/// Resolve the upstream target for a client-originated response/error/cancel.
+	///
+	/// Wrapped ids are client-echoed correlation tokens; routing is bounded to configured
+	/// upstreams via [`Relay::send_message_single`]. Pending-request validation is omitted
+	/// to keep federation stateless across gateway replicas.
+	#[cfg(feature = "adobe")]
+	fn resolve_client_response_target(
+		relay: &Relay,
+		id: &RequestId,
+	) -> Result<(String, RequestId), UpstreamError> {
+		if let Some(default) = relay.default_target_name() {
+			return Ok((default, id.clone()));
+		}
+		if let Some((target, orig)) = unwrap_server_request_id(id) {
+			return Ok((target, orig));
+		}
+		Err(UpstreamError::InvalidRequest(format!(
+			"unknown request id for client response: {id}"
+		)))
+	}
+
+	#[cfg(feature = "adobe")]
+	async fn forward_client_message_to_upstream(
+		&self,
+		parts: Parts,
+		method: &str,
+		message: ClientJsonRpcMessage,
+	) -> Result<Response, UpstreamError> {
+		let (target, message) = match message {
+			ClientJsonRpcMessage::Response(mut jr) => {
+				let (target, orig_id) = Self::resolve_client_response_target(&self.relay, &jr.id)?;
+				jr.id = orig_id;
+				(target, ClientJsonRpcMessage::Response(jr))
+			},
+			ClientJsonRpcMessage::Error(mut je) => {
+				let (target, orig_id) = Self::resolve_client_response_target(&self.relay, &je.id)?;
+				je.id = orig_id;
+				(target, ClientJsonRpcMessage::Error(je))
+			},
+			_ => {
+				return Err(UpstreamError::InvalidRequest(
+					"internal: expected client response or error".to_string(),
+				));
+			},
+		};
+		let ctx = IncomingRequestContext::new(&parts);
+		let (_span, log, _cel) = mcp::handler::setup_request_log(parts, method);
+		let session_id = self.id.to_string();
+		log.non_atomic_mutate(|l| {
+			l.method_name = Some(method.to_string());
+			l.session_id = Some(session_id);
+		});
+		self.relay.send_message_single(message, ctx, target.as_str()).await
+	}
+
 	async fn send_initialized_notification_single(
 		&self,
 		parts: Parts,
@@ -635,7 +712,7 @@ impl Session {
 							let target_for_map = service_name.to_string();
 							self
 								.relay
-								.send_single_map_response(
+								.send_single_map_response_cancellable(
 									r,
 									ctx,
 									service_name.as_str(),
@@ -646,6 +723,7 @@ impl Session {
 										target_for_map,
 									),
 									Some(log.clone()),
+									self.in_flight.clone(),
 								)
 								.await
 						}
@@ -853,14 +931,49 @@ impl Session {
 					l.method_name = Some(method.to_string());
 					l.session_id = Some(session_id);
 				});
-				// TODO: the notification needs to be fanned out in some cases and sent to a single one in others
-				// however, we don't have a way to map to the correct service yet
+				#[cfg(feature = "adobe")]
+				{
+					let mut notification = r.notification.clone();
+					if let ClientNotification::CancelledNotification(cn) = &mut notification {
+						if let Some(target) = self.cancel_in_flight(&cn.params.request_id) {
+							return self
+								.relay
+								.send_notification_single(notification, ctx, target.as_str())
+								.await;
+						}
+						if let Ok((target, orig_id)) =
+							Self::resolve_client_response_target(&self.relay, &cn.params.request_id)
+						{
+							cn.params.request_id = orig_id;
+							return self
+								.relay
+								.send_notification_single(notification, ctx, target.as_str())
+								.await;
+						}
+					}
+				}
 				self.relay.send_notification(r, ctx).await
 			},
 
-			_ => Err(UpstreamError::InvalidRequest(
-				"unsupported message type".to_string(),
-			)),
+			#[cfg(feature = "adobe")]
+			ClientJsonRpcMessage::Response(jr) => {
+				self
+					.forward_client_message_to_upstream(parts, "client_response", ClientJsonRpcMessage::Response(jr))
+					.await
+			},
+			#[cfg(feature = "adobe")]
+			ClientJsonRpcMessage::Error(je) => {
+				self
+					.forward_client_message_to_upstream(parts, "client_error", ClientJsonRpcMessage::Error(je))
+					.await
+			},
+
+			#[cfg(not(feature = "adobe"))]
+			ClientJsonRpcMessage::Response(_) | ClientJsonRpcMessage::Error(_) => {
+				Err(UpstreamError::InvalidRequest(
+					"unsupported message type".to_string(),
+				))
+			},
 		}
 	}
 
@@ -936,6 +1049,8 @@ impl SessionManager {
 			relay: Arc::new(relay),
 			tx: None,
 			encoder: self.encoder.clone(),
+			#[cfg(feature = "adobe")]
+			in_flight: new_in_flight_registry(),
 		};
 		let mut sm = self.sessions.write().expect("write lock");
 		sm.insert(
@@ -959,6 +1074,8 @@ impl SessionManager {
 			relay: Arc::new(relay),
 			tx: None,
 			encoder: self.encoder.clone(),
+			#[cfg(feature = "adobe")]
+			in_flight: new_in_flight_registry(),
 		}
 	}
 
@@ -985,6 +1102,8 @@ impl SessionManager {
 			relay: Arc::new(relay),
 			tx: None,
 			encoder: self.encoder.clone(),
+			#[cfg(feature = "adobe")]
+			in_flight: new_in_flight_registry(),
 		}
 	}
 
@@ -1002,6 +1121,8 @@ impl SessionManager {
 			relay: Arc::new(relay),
 			tx: Some(tx),
 			encoder: self.encoder.clone(),
+			#[cfg(feature = "adobe")]
+			in_flight: new_in_flight_registry(),
 		};
 		let mut sm = self.sessions.write().expect("write lock");
 		sm.insert(

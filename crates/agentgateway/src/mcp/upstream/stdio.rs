@@ -103,6 +103,22 @@ impl Process {
 			.map_err(|_| UpstreamError::Send)?;
 		Ok(())
 	}
+	#[cfg(feature = "adobe")]
+	pub async fn send_client_message(
+		&self,
+		message: ClientJsonRpcMessage,
+		ctx: &IncomingRequestContext,
+	) -> Result<(), UpstreamError> {
+		if !self.is_alive() {
+			return Err(UpstreamError::Send);
+		}
+		self
+			.sender
+			.send((message, ctx.clone()))
+			.await
+			.map_err(|_| UpstreamError::Send)?;
+		Ok(())
+	}
 }
 
 impl Process {

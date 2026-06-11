@@ -5942,6 +5942,716 @@ mod adobe_mcp_apps_integration {
 }
 
 #[cfg(feature = "adobe")]
+mod federated_elicitation_tests {
+	use std::sync::Arc;
+
+	use agent_core::strng;
+	use rmcp::model::{
+		CancelledNotificationParam, ClientCapabilities, ClientInfo, CreateElicitationRequestParams,
+		ElicitationAction, ElicitationSchema, Implementation, PrimitiveSchema, RequestId,
+		StringSchema,
+	};
+	use rmcp::service::{NotificationContext, RequestContext};
+	use rmcp::transport::streamable_http_server::StreamableHttpService;
+	use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+	use rmcp::{
+		ClientHandler, ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler,
+		tool_router,
+	};
+	use rmcp::{RoleClient, ServiceExt};
+	use serde_json::json;
+	use std::sync::atomic::{AtomicU32, Ordering};
+	use tokio::sync::Mutex;
+
+	use super::*;
+	use crate::test_helpers::proxymock::{basic_named_route, simple_bind};
+
+	#[derive(Clone)]
+	struct ElicitServer;
+
+	#[tool_router]
+	impl ElicitServer {
+		pub fn new() -> Self {
+			Self
+		}
+
+		#[tool(description = "Elicit user input then echo it")]
+		async fn elicit_echo(
+			&self,
+			ctx: RequestContext<RoleServer>,
+		) -> Result<rmcp::model::CallToolResult, McpError> {
+			let schema = ElicitationSchema::builder()
+				.required_property("answer", PrimitiveSchema::String(StringSchema::new()))
+				.build()
+				.map_err(|e| McpError::invalid_params(e.to_string(), None))?;
+			let response = ctx
+				.peer
+				.create_elicitation(CreateElicitationRequestParams::FormElicitationParams {
+					meta: None,
+					message: "provide answer".to_string(),
+					requested_schema: schema,
+				})
+				.await
+				.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+			let text = match response.action {
+				ElicitationAction::Accept => response
+					.content
+					.and_then(|v| v.get("answer").and_then(|a| a.as_str()).map(str::to_string))
+					.unwrap_or_else(|| "empty".to_string()),
+				ElicitationAction::Decline => "declined".to_string(),
+				ElicitationAction::Cancel => "cancelled".to_string(),
+			};
+			Ok(rmcp::model::CallToolResult::success(vec![
+				rmcp::model::Content::text(text),
+			]))
+		}
+	}
+
+	#[tool_handler]
+	impl ServerHandler for ElicitServer {
+		fn get_info(&self) -> rmcp::model::ServerInfo {
+			rmcp::model::ServerInfo::new(
+				rmcp::model::ServerCapabilities::builder()
+					.enable_tools()
+					.build(),
+			)
+		}
+	}
+
+	async fn mock_elicitation_server() -> MockServer {
+		use rmcp::transport::StreamableHttpServerConfig;
+		agent_core::telemetry::testing::setup_test_logging();
+		let init_counter = Arc::new(Mutex::new(0_i32));
+		let service = StreamableHttpService::new(
+			|| Ok(ElicitServer::new()),
+			LocalSessionManager::default().into(),
+			StreamableHttpServerConfig::default()
+				.with_sse_retry(None)
+				.with_sse_keep_alive(None)
+				.with_stateful_mode(true)
+				.with_json_response(false),
+		);
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let addr = tcp_listener.local_addr().unwrap();
+		tokio::spawn(async move {
+			let router = axum::Router::new().nest_service("/mcp", service);
+			let _ = axum::serve(tcp_listener, router)
+				.with_graceful_shutdown(async { rx.await.unwrap() })
+				.await;
+		});
+		MockServer {
+			addr,
+			init_counter,
+			_cancel: tx,
+		}
+	}
+
+	#[derive(Clone)]
+	struct AutoAcceptElicitation;
+
+	impl ClientHandler for AutoAcceptElicitation {
+		fn get_info(&self) -> ClientInfo {
+			ClientInfo::new(
+				ClientCapabilities::builder().enable_elicitation().build(),
+				Implementation::new("elicitation test client".to_string(), "0.0.1".to_string()),
+			)
+		}
+
+		async fn create_elicitation(
+			&self,
+			_request: CreateElicitationRequestParams,
+			_context: rmcp::service::RequestContext<RoleClient>,
+		) -> Result<rmcp::model::CreateElicitationResult, McpError> {
+			Ok(rmcp::model::CreateElicitationResult {
+				action: ElicitationAction::Accept,
+				content: Some(json!({"answer": "federated-ok"})),
+				meta: None,
+			})
+		}
+	}
+
+	async fn mcp_elicitation_client(
+		s: SocketAddr,
+	) -> rmcp::service::RunningService<RoleClient, AutoAcceptElicitation> {
+		use rmcp::transport::StreamableHttpClientTransport;
+		let transport =
+			StreamableHttpClientTransport::<reqwest::Client>::from_uri(format!("http://{s}/mcp"));
+		AutoAcceptElicitation.serve(transport).await.unwrap()
+	}
+
+	#[derive(Clone)]
+	struct ElicitationActionClient {
+		action: ElicitationAction,
+	}
+
+	impl ClientHandler for ElicitationActionClient {
+		fn get_info(&self) -> ClientInfo {
+			ClientInfo::new(
+				ClientCapabilities::builder().enable_elicitation().build(),
+				Implementation::new("elicitation action client".to_string(), "0.0.1".to_string()),
+			)
+		}
+
+		async fn create_elicitation(
+			&self,
+			_request: CreateElicitationRequestParams,
+			_context: rmcp::service::RequestContext<RoleClient>,
+		) -> Result<rmcp::model::CreateElicitationResult, McpError> {
+			Ok(rmcp::model::CreateElicitationResult {
+				action: self.action.clone(),
+				content: None,
+				meta: None,
+			})
+		}
+	}
+
+	async fn mcp_elicitation_action_client(
+		s: SocketAddr,
+		action: ElicitationAction,
+	) -> rmcp::service::RunningService<RoleClient, ElicitationActionClient> {
+		use rmcp::transport::StreamableHttpClientTransport;
+		let transport =
+			StreamableHttpClientTransport::<reqwest::Client>::from_uri(format!("http://{s}/mcp"));
+		ElicitationActionClient { action }
+			.serve(transport)
+			.await
+			.unwrap()
+	}
+
+	#[derive(Clone)]
+	struct BlockingElicitServer {
+		started: Arc<tokio::sync::Notify>,
+		tool_cancelled: Arc<tokio::sync::Notify>,
+		call_id: Arc<Mutex<Option<RequestId>>>,
+	}
+
+	#[tool_router]
+	impl BlockingElicitServer {
+		pub fn new(
+			started: Arc<tokio::sync::Notify>,
+			tool_cancelled: Arc<tokio::sync::Notify>,
+			call_id: Arc<Mutex<Option<RequestId>>>,
+		) -> Self {
+			Self {
+				started,
+				tool_cancelled,
+				call_id,
+			}
+		}
+
+		#[tool(description = "Block until the downstream client cancels tools/call")]
+		async fn block_until_cancel(
+			&self,
+			ctx: RequestContext<RoleServer>,
+		) -> Result<rmcp::model::CallToolResult, McpError> {
+			*self.call_id.lock().await = Some(ctx.id.clone());
+			self.started.notify_one();
+			ctx.ct.cancelled().await;
+			self.tool_cancelled.notify_one();
+			Ok(rmcp::model::CallToolResult::success(vec![
+				rmcp::model::Content::text("teardown"),
+			]))
+		}
+	}
+
+	#[tool_handler]
+	impl ServerHandler for BlockingElicitServer {
+		fn get_info(&self) -> rmcp::model::ServerInfo {
+			rmcp::model::ServerInfo::new(
+				rmcp::model::ServerCapabilities::builder()
+					.enable_tools()
+					.build(),
+			)
+		}
+	}
+
+	async fn mock_blocking_elicitation_server(
+		started: Arc<tokio::sync::Notify>,
+		tool_cancelled: Arc<tokio::sync::Notify>,
+		call_id: Arc<Mutex<Option<RequestId>>>,
+	) -> MockServer {
+		use rmcp::transport::StreamableHttpServerConfig;
+		agent_core::telemetry::testing::setup_test_logging();
+		let init_counter = Arc::new(Mutex::new(0_i32));
+		let service = StreamableHttpService::new(
+			move || {
+				Ok(BlockingElicitServer::new(
+					started.clone(),
+					tool_cancelled.clone(),
+					call_id.clone(),
+				))
+			},
+			LocalSessionManager::default().into(),
+			StreamableHttpServerConfig::default()
+				.with_sse_retry(None)
+				.with_sse_keep_alive(None)
+				.with_stateful_mode(true)
+				.with_json_response(false),
+		);
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let addr = tcp_listener.local_addr().unwrap();
+		tokio::spawn(async move {
+			let router = axum::Router::new().nest_service("/mcp", service);
+			let _ = axum::serve(tcp_listener, router)
+				.with_graceful_shutdown(async { rx.await.unwrap() })
+				.await;
+		});
+		MockServer {
+			addr,
+			init_counter,
+			_cancel: tx,
+		}
+	}
+
+	#[derive(Clone)]
+	struct CancelCountingServer {
+		cancel_count: Arc<AtomicU32>,
+	}
+
+	#[tool_router]
+	impl CancelCountingServer {
+		pub fn new(cancel_count: Arc<AtomicU32>) -> Self {
+			Self { cancel_count }
+		}
+
+		#[tool(description = "No-op tool for multiplex cancel routing tests")]
+		fn noop(&self) -> Result<rmcp::model::CallToolResult, McpError> {
+			Ok(rmcp::model::CallToolResult::success(vec![
+				rmcp::model::Content::text("ok"),
+			]))
+		}
+	}
+
+	#[tool_handler]
+	impl ServerHandler for CancelCountingServer {
+		fn get_info(&self) -> rmcp::model::ServerInfo {
+			rmcp::model::ServerInfo::new(
+				rmcp::model::ServerCapabilities::builder()
+					.enable_tools()
+					.build(),
+			)
+		}
+
+		async fn on_cancelled(
+			&self,
+			_notification: CancelledNotificationParam,
+			_context: NotificationContext<RoleServer>,
+		) {
+			self.cancel_count.fetch_add(1, Ordering::SeqCst);
+		}
+	}
+
+	async fn mock_cancel_counting_server(cancel_count: Arc<AtomicU32>) -> MockServer {
+		use rmcp::transport::StreamableHttpServerConfig;
+		agent_core::telemetry::testing::setup_test_logging();
+		let init_counter = Arc::new(Mutex::new(0_i32));
+		let service = StreamableHttpService::new(
+			{
+				let cancel_count = cancel_count.clone();
+				move || Ok(CancelCountingServer::new(cancel_count.clone()))
+			},
+			LocalSessionManager::default().into(),
+			StreamableHttpServerConfig::default()
+				.with_sse_retry(None)
+				.with_sse_keep_alive(None)
+				.with_stateful_mode(true)
+				.with_json_response(false),
+		);
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let addr = tcp_listener.local_addr().unwrap();
+		tokio::spawn(async move {
+			let router = axum::Router::new().nest_service("/mcp", service);
+			let _ = axum::serve(tcp_listener, router)
+				.with_graceful_shutdown(async { rx.await.unwrap() })
+				.await;
+		});
+		MockServer {
+			addr,
+			init_counter,
+			_cancel: tx,
+		}
+	}
+
+	// rmcp's StreamableHttpClientTransport opens a client-initiated GET /mcp SSE stream
+	// after initialize (the same path production MCP clients use). Server-initiated
+	// requests such as elicitation/create are delivered on that GET fanout, not via a
+	// gateway-owned background upstream GET.
+	#[tokio::test]
+	async fn federated_elicitation_round_trip_completes() {
+		let elicit = mock_elicitation_server().await;
+		let plain = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("elicit", elicit.addr, false),
+					("plain", plain.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_elicitation_client(io).await;
+
+		let result = client
+			.call_tool(
+				rmcp::model::CallToolRequestParams::new("elicit_elicit_echo")
+					.with_arguments(serde_json::Map::new()),
+			)
+			.await
+			.expect("tools/call should complete after elicitation round-trip");
+
+		assert_eq!(
+			result.content[0].raw.as_text().unwrap().text,
+			"federated-ok"
+		);
+	}
+
+	#[tokio::test]
+	async fn single_target_elicitation_round_trip_completes() {
+		let elicit = mock_elicitation_server().await;
+		let (_bind, io) = setup_proxy(&elicit, true, false).await;
+		let client = mcp_elicitation_client(io).await;
+
+		let result = client
+			.call_tool(
+				rmcp::model::CallToolRequestParams::new("elicit_echo")
+					.with_arguments(serde_json::Map::new()),
+			)
+			.await
+			.expect("single-target elicitation should complete");
+
+		assert_eq!(
+			result.content[0].raw.as_text().unwrap().text,
+			"federated-ok"
+		);
+	}
+
+	#[tokio::test]
+	async fn federated_elicitation_decline_round_trip() {
+		let elicit = mock_elicitation_server().await;
+		let plain = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("elicit", elicit.addr, false),
+					("plain", plain.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_elicitation_action_client(io, ElicitationAction::Decline).await;
+
+		let result = client
+			.call_tool(
+				rmcp::model::CallToolRequestParams::new("elicit_elicit_echo")
+					.with_arguments(serde_json::Map::new()),
+			)
+			.await
+			.expect("decline elicitation should complete tools/call");
+
+		assert_eq!(result.content[0].raw.as_text().unwrap().text, "declined");
+	}
+
+	#[tokio::test]
+	async fn federated_elicitation_cancel_round_trip() {
+		let elicit = mock_elicitation_server().await;
+		let plain = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("elicit", elicit.addr, false),
+					("plain", plain.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_elicitation_action_client(io, ElicitationAction::Cancel).await;
+
+		let result = client
+			.call_tool(
+				rmcp::model::CallToolRequestParams::new("elicit_elicit_echo")
+					.with_arguments(serde_json::Map::new()),
+			)
+			.await
+			.expect("cancel elicitation should complete tools/call");
+
+		assert_eq!(result.content[0].raw.as_text().unwrap().text, "cancelled");
+	}
+
+	#[tokio::test]
+	async fn federated_tools_call_cancel_routes_to_single_upstream() {
+		let started = Arc::new(tokio::sync::Notify::new());
+		let tool_cancelled = Arc::new(tokio::sync::Notify::new());
+		let call_id = Arc::new(Mutex::new(None));
+		let plain_cancel_count = Arc::new(AtomicU32::new(0));
+
+		let blocking = mock_blocking_elicitation_server(
+			started.clone(),
+			tool_cancelled.clone(),
+			call_id.clone(),
+		)
+		.await;
+		let plain = mock_cancel_counting_server(plain_cancel_count.clone()).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("blocking", blocking.addr, false),
+					("plain", plain.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let client = mcp_elicitation_client(io).await;
+
+		let call_fut = client.call_tool(
+			rmcp::model::CallToolRequestParams::new("blocking_block_until_cancel")
+				.with_arguments(serde_json::Map::new()),
+		);
+		tokio::pin!(call_fut);
+
+		tokio::select! {
+			_ = &mut call_fut => panic!("tools/call should not complete before cancel"),
+			_ = started.notified() => {},
+		}
+
+		let request_id = call_id.lock().await.clone().expect("upstream should record call id");
+		client
+			.notify_cancelled(CancelledNotificationParam {
+				request_id,
+				reason: Some("test cancel".to_string()),
+			})
+			.await
+			.expect("client should send notifications/cancelled");
+
+		tokio::select! {
+			result = &mut call_fut => {
+				match result {
+					Err(rmcp::ServiceError::Cancelled { reason }) => {
+						assert_eq!(reason.as_deref(), Some("test cancel"));
+					},
+					other => panic!("expected client-side cancel, got {other:?}"),
+				}
+			},
+			_ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+				panic!("tools/call did not complete after cancel");
+			},
+		}
+
+		tokio::select! {
+			_ = tool_cancelled.notified() => {},
+			_ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+				panic!("blocking upstream did not observe cancel teardown");
+			},
+		}
+
+		assert_eq!(
+			plain_cancel_count.load(Ordering::SeqCst),
+			0,
+			"cancel should not fan out to unrelated upstream"
+		);
+	}
+}
+
+#[cfg(feature = "adobe")]
+mod federated_progress_tests {
+	use std::sync::Arc;
+
+	use agent_core::strng;
+	use rmcp::model::{
+		ClientCapabilities, ClientInfo, Implementation, Meta, NumberOrString, ProgressNotificationParam,
+		ProgressToken,
+	};
+	use rmcp::service::NotificationContext;
+	use rmcp::transport::streamable_http_server::StreamableHttpService;
+	use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+	use rmcp::{
+		ClientHandler, ErrorData as McpError, RoleServer, ServerHandler, tool, tool_handler,
+		tool_router,
+	};
+	use rmcp::{RoleClient, ServiceExt};
+	use tokio::sync::Mutex;
+
+	use super::*;
+	use crate::test_helpers::proxymock::{basic_named_route, simple_bind};
+
+	#[derive(Clone)]
+	struct ProgressServer;
+
+	#[tool_router]
+	impl ProgressServer {
+		pub fn new() -> Self {
+			Self
+		}
+
+		#[tool(description = "Emit one progress notification then return")]
+		async fn progress_echo(
+			&self,
+			ctx: rmcp::service::RequestContext<RoleServer>,
+		) -> Result<rmcp::model::CallToolResult, McpError> {
+			if let Some(token) = ctx.meta.get_progress_token() {
+				ctx.peer
+					.notify_progress(
+						ProgressNotificationParam::new(token, 0.5)
+							.with_message("gateway-progress-check"),
+					)
+					.await
+					.map_err(|e| McpError::internal_error(e.to_string(), None))?;
+			}
+			Ok(rmcp::model::CallToolResult::success(vec![
+				rmcp::model::Content::text("done"),
+			]))
+		}
+	}
+
+	#[tool_handler]
+	impl ServerHandler for ProgressServer {
+		fn get_info(&self) -> rmcp::model::ServerInfo {
+			rmcp::model::ServerInfo::new(
+				rmcp::model::ServerCapabilities::builder()
+					.enable_tools()
+					.build(),
+			)
+		}
+	}
+
+	async fn mock_progress_server() -> MockServer {
+		use rmcp::transport::StreamableHttpServerConfig;
+		agent_core::telemetry::testing::setup_test_logging();
+		let init_counter = Arc::new(Mutex::new(0_i32));
+		let service = StreamableHttpService::new(
+			|| Ok(ProgressServer::new()),
+			LocalSessionManager::default().into(),
+			StreamableHttpServerConfig::default()
+				.with_sse_retry(None)
+				.with_sse_keep_alive(None)
+				.with_stateful_mode(true)
+				.with_json_response(false),
+		);
+		let (tx, rx) = tokio::sync::oneshot::channel();
+		let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let addr = tcp_listener.local_addr().unwrap();
+		tokio::spawn(async move {
+			let router = axum::Router::new().nest_service("/mcp", service);
+			let _ = axum::serve(tcp_listener, router)
+				.with_graceful_shutdown(async { rx.await.unwrap() })
+				.await;
+		});
+		MockServer {
+			addr,
+			init_counter,
+			_cancel: tx,
+		}
+	}
+
+	#[derive(Clone)]
+	struct ProgressCapturingClient {
+		seen: Arc<Mutex<Vec<ProgressNotificationParam>>>,
+	}
+
+	impl ProgressCapturingClient {
+		fn new() -> Self {
+			Self {
+				seen: Arc::new(Mutex::new(Vec::new())),
+			}
+		}
+	}
+
+	impl ClientHandler for ProgressCapturingClient {
+		fn get_info(&self) -> ClientInfo {
+			ClientInfo::new(
+				ClientCapabilities::builder().build(),
+				Implementation::new("progress test client".to_string(), "0.0.1".to_string()),
+			)
+		}
+
+		async fn on_progress(
+			&self,
+			params: ProgressNotificationParam,
+			_context: NotificationContext<RoleClient>,
+		) {
+			self.seen.lock().await.push(params);
+		}
+	}
+
+	async fn mcp_progress_client(
+		s: SocketAddr,
+	) -> (
+		rmcp::service::RunningService<RoleClient, ProgressCapturingClient>,
+		Arc<Mutex<Vec<ProgressNotificationParam>>>,
+	) {
+		use rmcp::transport::StreamableHttpClientTransport;
+		let client = ProgressCapturingClient::new();
+		let seen = client.seen.clone();
+		let transport =
+			StreamableHttpClientTransport::<reqwest::Client>::from_uri(format!("http://{s}/mcp"));
+		let running = client.serve(transport).await.unwrap();
+		(running, seen)
+	}
+
+	#[tokio::test]
+	async fn federated_progress_relayed_unchanged() {
+		let progress = mock_progress_server().await;
+		let plain = mock_streamable_http_server(true).await;
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("progress", progress.addr, false),
+					("plain", plain.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		let (client, seen) = mcp_progress_client(io).await;
+
+		// The rmcp client injects a progressToken tied to the tools/call request id;
+		// the upstream echoes that token back. We only assert the payload is relayed
+		// unchanged through the federated gateway, not a specific token value.
+		let mut params =
+			rmcp::model::CallToolRequestParams::new("progress_progress_echo");
+		params.meta = Some(Meta::with_progress_token(ProgressToken(NumberOrString::Number(
+			42,
+		))));
+
+		let result = client
+			.call_tool(params)
+			.await
+			.expect("tools/call should complete with progress on the stream");
+
+		assert_eq!(result.content[0].raw.as_text().unwrap().text, "done");
+
+		let notifications = seen.lock().await;
+		assert_eq!(notifications.len(), 1);
+		assert!((notifications[0].progress - 0.5).abs() < f64::EPSILON);
+		assert_eq!(
+			notifications[0].message.as_deref(),
+			Some("gateway-progress-check")
+		);
+	}
+}
+
+#[cfg(feature = "adobe")]
 mod histogram_tests {
 	use agent_core::strng;
 	use rmcp::model::CallToolRequestParams;

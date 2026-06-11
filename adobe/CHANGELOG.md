@@ -54,3 +54,13 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 - **Prometheus histogram `mcp_request_duration_seconds`:** records MCP request latency with `method` and `status` labels; exposed on the existing `/metrics` scrape endpoint (`#[cfg(feature = "adobe")]`).
 - Build: architecture suffix in `adobe/Makefile` now extracted from the `PLATFORM` variable instead of being hard-coded, fixing cross-arch snapshot builds.
 - Dev: local environment setup docs moved to a separate file (`.devcontainer` workflow); minor fork-friendliness refactors.
+
+## 1.2.3
+
+- **Federated MCP elicitation (and other server-initiated requests):** route client JSON-RPC `Response` / `Error` messages back to the originating upstream instead of rejecting them with `unsupported message type` (HTTP 500).
+- **Upstream-scoped client responses:** strip the federated client `mcp-session-id` before forwarding elicitation answers to upstream targets that already carry their own per-target session id.
+- **Stateless multiplex correlation:** encode upstream target into server→client JSON-RPC request ids on the GET/SSE fanout and single-upstream RPC paths; decode on the client reply so routing works across gateway replicas without shared in-memory state.
+- **Cancellation routing:** `notifications/cancelled` for an encoded server-initiated request is forwarded to the originating target only (not fan-out to all upstreams).
+- **Cancellation teardown:** when the downstream client cancels an in-flight `tools/call`, abort the held upstream POST SSE stream instead of keeping it open until the upstream times out.
+- **Progress passthrough:** relay genuine upstream `notifications/progress` on `tools/call` streams unchanged (no synthetic keep-alive).
+- **Operator note (elicitation timeouts):** interactive elicitation is bounded by the MCP client's request timeout (MCP Inspector default **10s**). The gateway respects that budget; raise the Inspector **Request Timeout** and **Max Total Timeout** for human-in-the-loop flows. Long-running interactive work should use the experimental Tasks flow (SEP-1686) rather than holding a single `tools/call` open indefinitely.
