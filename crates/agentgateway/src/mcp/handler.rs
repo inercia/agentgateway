@@ -558,6 +558,10 @@ impl Relay {
 		Ok(())
 	}
 
+	pub fn default_target_name(&self) -> Option<String> {
+		self.upstreams.default_target_name.clone()
+	}
+
 	pub fn merge_tools(&self) -> Box<MergeFn> {
 		let policies = self.policies.clone();
 		let rewrite = self.mcp_rewrite.clone();
