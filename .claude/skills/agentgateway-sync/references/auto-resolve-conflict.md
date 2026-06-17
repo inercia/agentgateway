@@ -111,6 +111,51 @@ git -C "$REPO" branch -D "sync/auto-resolve-<conflicting_short_sha>"
 
 Do **not** auto-open a scripted follow-up PR.
 
+## 4b. Generated-file regeneration (run before per-file classification)
+
+Before manually classifying hunks, check whether any conflicting path
+is a **known generated file** that can be regenerated from its source:
+
+| Conflicting path | Generator command (run from repo root) | Source |
+|---|---|---|
+| `api/resource.pb.go` | `PATH="./tools:$PATH" buf generate --path crates/protos/proto/resource.proto` | `crates/protos/proto/resource.proto` |
+| `api/resource_json.gen.go` | same command as above | same |
+
+**Why regenerate instead of manually merging:** Generated protobuf files
+contain numeric field indexes, protoc version stamps, and interleaved
+Go types that diverge structurally when both sides add new types. Manual
+hunk-merging is unreliable. The `.proto` source auto-merges cleanly
+(upstream and Adobe add to non-overlapping sections), so regenerating
+from the resolved source produces the correct combined output.
+
+**How to apply:**
+
+1. Check if `api/resource.pb.go` or `api/resource_json.gen.go` is in
+   `CONFLICT_FILES`.
+2. If yes, verify the `.proto` source merged cleanly (no conflict markers):
+   ```bash
+   grep -c "<<<<<<" crates/protos/proto/resource.proto || echo "clean"
+   ```
+   If the source is clean, regenerate:
+   ```bash
+   PATH="./tools:$PATH" buf generate --path crates/protos/proto/resource.proto
+   ```
+   The `buf` wrapper lives in `tools/buf`; warnings about `proto3_optional`
+   from the jsonshim plugin are expected and can be ignored.
+3. Verify no conflict markers remain in the generated files:
+   ```bash
+   grep -c "<<<<<<" api/resource.pb.go api/resource_json.gen.go 2>/dev/null || echo "clean"
+   ```
+4. Stage the regenerated files:
+   ```bash
+   git add api/resource.pb.go api/resource_json.gen.go
+   ```
+5. Remove these paths from `CONFLICT_FILES` before proceeding to §5.
+   If `CONFLICT_FILES` is now empty, skip to §8 (`rebase --continue`).
+
+If the `.proto` source itself has conflict markers → treat as SEMANTIC
+and halt (§6 HALT path).
+
 ## 5. Per-file classification
 
 For each path in `CONFLICT_FILES` (none of which is protected after
