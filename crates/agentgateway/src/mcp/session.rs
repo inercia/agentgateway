@@ -356,10 +356,10 @@ impl Session {
 		ctx: IncomingRequestContext,
 		cel: rbac::CelExecWrapper,
 	) -> Result<Response, UpstreamError> {
-		let targets = self
-			.relay
-			.capabilities
-			.upstreams_with_tools(&self.relay.all_target_names());
+		#[cfg(feature = "adobe")]
+		let targets = self.relay.capabilities.upstreams_with_tools(&self.relay.all_target_names());
+		#[cfg(not(feature = "adobe"))]
+		let targets = self.relay.all_target_names();
 		self
 			.relay
 			.send_fanout_to(&targets, r, ctx, self.relay.merge_tools(cel))
@@ -372,10 +372,10 @@ impl Session {
 		ctx: IncomingRequestContext,
 		cel: rbac::CelExecWrapper,
 	) -> Result<Response, UpstreamError> {
-		let targets = self
-			.relay
-			.capabilities
-			.upstreams_with_prompts(&self.relay.all_target_names());
+		#[cfg(feature = "adobe")]
+		let targets = self.relay.capabilities.upstreams_with_prompts(&self.relay.all_target_names());
+		#[cfg(not(feature = "adobe"))]
+		let targets = self.relay.all_target_names();
 		self
 			.relay
 			.send_fanout_to(&targets, r, ctx, self.relay.merge_prompts(cel))
@@ -388,10 +388,10 @@ impl Session {
 		ctx: IncomingRequestContext,
 		cel: rbac::CelExecWrapper,
 	) -> Result<Response, UpstreamError> {
-		let targets = self
-			.relay
-			.capabilities
-			.upstreams_with_resources(&self.relay.all_target_names());
+		#[cfg(feature = "adobe")]
+		let targets = self.relay.capabilities.upstreams_with_resources(&self.relay.all_target_names());
+		#[cfg(not(feature = "adobe"))]
+		let targets = self.relay.all_target_names();
 		self
 			.relay
 			.send_fanout_to(&targets, r, ctx, self.relay.merge_resources(cel))
@@ -404,10 +404,10 @@ impl Session {
 		ctx: IncomingRequestContext,
 		cel: rbac::CelExecWrapper,
 	) -> Result<Response, UpstreamError> {
-		let targets = self
-			.relay
-			.capabilities
-			.upstreams_with_resources(&self.relay.all_target_names());
+		#[cfg(feature = "adobe")]
+		let targets = self.relay.capabilities.upstreams_with_resources(&self.relay.all_target_names());
+		#[cfg(not(feature = "adobe"))]
+		let targets = self.relay.all_target_names();
 		self
 			.relay
 			.send_fanout_to(&targets, r, ctx, self.relay.merge_resource_templates(cel))
@@ -766,51 +766,33 @@ impl Session {
 					},
 					#[cfg(not(feature = "adobe"))]
 					ClientRequest::SubscribeRequest(sr) => {
-						if let Some(service_name) = self.relay.default_target_name() {
-							let uri = sr.params.uri.clone();
-							self.authorize_resource_request(
-								&service_name,
-								&uri,
-								&method,
-								&mut span,
-								&log,
-								&cel,
-							)?;
-							self
-								.relay
-								.send_single(r, ctx, service_name.as_str(), None)
-								.await
-						} else {
-							// TODO(https://github.com/agentgateway/agentgateway/issues/404)
-							// Find a mapping of URL
-							Err(UpstreamError::InvalidMethodWithMultiplexing(
-								r.request.method().to_string(),
-							))
-						}
+						let uri = sr.params.uri.clone();
+						let (service_name, original_uri) = self.relay.parse_resource_uri(&uri)?;
+						self.authorize_resource_request(
+							&service_name,
+							&original_uri,
+							&method,
+							&mut span,
+							&log,
+							&cel,
+						)?;
+						sr.params.uri = original_uri;
+						self.relay.send_single(r, ctx, service_name.as_str(), None).await
 					},
 					#[cfg(not(feature = "adobe"))]
 					ClientRequest::UnsubscribeRequest(ur) => {
-						if let Some(service_name) = self.relay.default_target_name() {
-							let uri = ur.params.uri.clone();
-							self.authorize_resource_request(
-								&service_name,
-								&uri,
-								&method,
-								&mut span,
-								&log,
-								&cel,
-							)?;
-							self
-								.relay
-								.send_single(r, ctx, service_name.as_str(), None)
-								.await
-						} else {
-							// TODO(https://github.com/agentgateway/agentgateway/issues/404)
-							// Find a mapping of URL
-							Err(UpstreamError::InvalidMethodWithMultiplexing(
-								r.request.method().to_string(),
-							))
-						}
+						let uri = ur.params.uri.clone();
+						let (service_name, original_uri) = self.relay.parse_resource_uri(&uri)?;
+						self.authorize_resource_request(
+							&service_name,
+							&original_uri,
+							&method,
+							&mut span,
+							&log,
+							&cel,
+						)?;
+						ur.params.uri = original_uri;
+						self.relay.send_single(r, ctx, service_name.as_str(), None).await
 					},
 
 					#[cfg(feature = "adobe")]
