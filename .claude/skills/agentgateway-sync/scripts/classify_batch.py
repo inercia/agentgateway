@@ -3,6 +3,13 @@
 
 Usage:
     python3 classify_batch.py <repo> <sha1> [<sha2> ...]
+    python3 classify_batch.py <repo> --shas-file <path>
+
+Prefer ``--shas-file`` (one SHA per line) over inline positional SHAs:
+passing a large SHA list through shell ``$VAR`` expansion silently
+word-splits / truncates under zsh, which classified only the first SHA
+in past incidents. The file form is immune to that. Blank lines and
+``#`` comments in the file are ignored.
 
 Calls into ``classify_commit.classify`` for each SHA and emits a single
 JSON object with:
@@ -46,13 +53,43 @@ def _max_risk(a: str, b: str) -> str:
     return a if RISK_ORDER.index(a) >= RISK_ORDER.index(b) else b
 
 
+def _read_shas_file(path: str) -> list[str]:
+    shas: list[str] = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            shas.append(line)
+    return shas
+
+
 def main() -> int:
     if len(sys.argv) < 3:
-        print("usage: classify_batch.py <repo> <sha> [<sha> ...]", file=sys.stderr)
+        print(
+            "usage: classify_batch.py <repo> <sha> [<sha> ...]\n"
+            "       classify_batch.py <repo> --shas-file <path>",
+            file=sys.stderr,
+        )
         return 2
 
     repo = str(Path(sys.argv[1]).resolve())
-    shas = sys.argv[2:]
+    rest = sys.argv[2:]
+
+    if rest[0] == "--shas-file":
+        if len(rest) != 2:
+            print("--shas-file takes exactly one path argument", file=sys.stderr)
+            return 2
+        try:
+            shas = _read_shas_file(rest[1])
+        except OSError as exc:
+            print(json.dumps({"errors": [f"cannot read --shas-file: {exc}"]}, indent=2))
+            return 1
+        if not shas:
+            print(json.dumps({"errors": [f"--shas-file {rest[1]} is empty"]}, indent=2))
+            return 1
+    else:
+        shas = rest
 
     if not os.path.isdir(os.path.join(repo, ".git")):
         print(json.dumps({"errors": [f"{repo} is not a git checkout"]}, indent=2))

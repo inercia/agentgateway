@@ -64,13 +64,21 @@ If `batch_count == 0`, return to the dispatcher — nothing to sync.
 
 ## Step 2: classify the batch (informational)
 
+Write `batch_commits[*].sha` to a file and pass `--shas-file` — **never
+shell-expand a SHA list** (`$SHAS` word-splits under zsh and classifies
+only the first SHA; see `conventions.md` "SHA-list passing"):
+
 ```bash
-python3 "$SKILL_DIR/scripts/classify_batch.py" "$REPO" \
-  <sha1> <sha2> <sha3> ... <shaN> > "$TMP_DIR/classify.json"
+python3 -c "import json; d=json.load(open('$TMP_DIR/inspect.json')); open('$TMP_DIR/batch_shas.txt','w').write('\n'.join(c['sha'] for c in d['batch_commits']))"
 ```
 
-Inline every SHA from `batch_commits[*].sha` as separate args. Parse
-the JSON if needed; **`$TMP_DIR/classify.json`** is the machine input for
+```bash
+rm -f "$TMP_DIR/classify.json"
+python3 "$SKILL_DIR/scripts/classify_batch.py" "$REPO" \
+  --shas-file "$TMP_DIR/batch_shas.txt" > "$TMP_DIR/classify.json"
+```
+
+Parse the JSON if needed; **`$TMP_DIR/classify.json`** is the machine input for
 **`compose_pr_body.py --merge`** in step 8.
 
 **Do not gate on this output.** Even `risk: critical` proceeds — gate 1
@@ -96,11 +104,15 @@ same logic as single-commit mode). Tell the user the picked name.
 ## Step 4: baseline test run
 
 ```bash
-python3 "$SKILL_DIR/scripts/run_tests.py" "$REPO" baseline --log-dir "$TMP_DIR" \
+PATH="$HOME/.cargo/bin:$PATH" python3 "$SKILL_DIR/scripts/run_tests.py" "$REPO" baseline --log-dir "$TMP_DIR" \
   --cache-file "$TMP_DIR/test_cache.json" \
   --cache-key "$(git -C "$REPO" rev-parse adobe)" \
   --output "$TMP_DIR/run_tests_baseline.json"
 ```
+
+(The `PATH="$HOME/.cargo/bin:$PATH"` prefix is required — see
+`preconditions.md` "Environment preflight". `make test` fails with
+`cargo: No such file or directory` without it.)
 
 Same expectations as the per-commit flow: `all_passed: true`, zero
 failures, zero warnings. If the baseline is dirty, **stop** — the fork
@@ -213,14 +225,20 @@ working state, but start from a known place):
 git -C "$REPO" switch adobe
 ```
 
-Run the bisection script:
+Run the bisection script. It has **no `--output` flag** — redirect
+stdout to `$TMP_DIR/bisect.json` (the auto-resolve PR body reads this
+file via `compose_pr_body.py --find-clean-prefix`). `rm -f` first so a
+failed run cannot leave a stale prior-batch `bisect.json` readable (see
+`conventions.md` "Artifact staleness guard"):
 
 ```bash
+rm -f "$TMP_DIR/bisect.json"
 python3 "$SKILL_DIR/scripts/find_clean_prefix.py" "$REPO" \
-  --base-ref adobe --upstream-ref upstream/main --count <batch_count>
+  --base-ref adobe --upstream-ref upstream/main --count <batch_count> \
+  > "$TMP_DIR/bisect.json"
 ```
 
-Parse the JSON:
+Parse the JSON (confirm the producer exited 0 before reading):
 
 ```json
 {
@@ -272,26 +290,34 @@ commit. This is the path that turns "stop and wake the user" into
    - `batch_end_short_sha := clean_end_short_sha`
    - `batch_commits` truncated to first `clean_count` entries
 
-   **Re-run `inspect_state.py` with the prefix count** so the saved
-   `inspect.json` reflects only the commits that will actually land.
-   This is the file `compose_pr_body.py` reads for the commit table —
-   if it still holds the full batch, the PR title will say "4 commits"
-   but the body will list 12:
+   **Re-run `inspect_state.py` with the prefix count, overwriting the
+   same `$TMP_DIR/inspect.json`** (do not write a separate
+   `inspect_prefix.json` — `compose_pr_body.py --merge` reads
+   `$TMP_DIR/inspect.json` and `$TMP_DIR/classify.json` by the names
+   you pass, and it **validates that the classify file has an entry for
+   every commit in the inspect file**. A count mismatch fails with
+   `classify-batch has no entry for sha …` before any markdown is
+   written). If `inspect.json` still holds the full batch, the PR title
+   says "5 commits" but the body lists 50:
 
    ```bash
+   rm -f "$TMP_DIR/inspect.json"
    python3 "$SKILL_DIR/scripts/inspect_state.py" "$REPO" \
      --count <clean_count> > "$TMP_DIR/inspect.json"
    ```
 
-   **Also filter `classify.json`** to only the prefix SHAs. The
-   simplest approach: keep the existing classification results but drop
-   rows for commits outside the prefix (they will be classified again
-   when their batch runs):
+   **Then re-classify exactly the prefix SHAs** into the same
+   `$TMP_DIR/classify.json`. Pass the SHAs via `--shas-file` (never
+   shell-expand a SHA list — see `conventions.md` "SHA-list passing"):
 
-   ```python
-   prefix_shas = {c["sha"] for c in batch_commits[:clean_count]}
-   filtered = {**classify_data, "commits": [c for c in classify_data["commits"] if c["sha"] in prefix_shas]}
-   # write to $TMP_DIR/classify.json
+   ```bash
+   python3 -c "import json; d=json.load(open('$TMP_DIR/inspect.json')); open('$TMP_DIR/batch_shas.txt','w').write('\n'.join(c['sha'] for c in d['batch_commits']))"
+   ```
+
+   ```bash
+   rm -f "$TMP_DIR/classify.json"
+   python3 "$SKILL_DIR/scripts/classify_batch.py" "$REPO" \
+     --shas-file "$TMP_DIR/batch_shas.txt" > "$TMP_DIR/classify.json"
    ```
 
 2. **Re-pick the sync branch name** with the new (smaller) count and
@@ -333,7 +359,7 @@ stop. Don't attempt a third rebase.
 ## Step 6. Post-rebase tests (gate 2)
 
 ```bash
-python3 "$SKILL_DIR/scripts/run_tests.py" "$REPO" synced --log-dir "$TMP_DIR" --retry-once \
+PATH="$HOME/.cargo/bin:$PATH" python3 "$SKILL_DIR/scripts/run_tests.py" "$REPO" synced --log-dir "$TMP_DIR" --retry-once \
   --cache-file "$TMP_DIR/test_cache.json" \
   --cache-key "$(git -C "$REPO" rev-parse HEAD)" \
   --output "$TMP_DIR/run_tests_synced.json"
