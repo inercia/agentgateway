@@ -37,7 +37,9 @@ use crate::mcp::{ClientError, FailureMode, MCPInfo, mergestream, rbac, upstream}
 use crate::proxy::httpproxy::PolicyClient;
 use crate::telemetry::log::{AsyncLog, SpanWriteOnDrop, SpanWriter};
 
-use crate::mcp::mcp_apps::routing::{apply_multiplex_to_listed_resource, apply_multiplex_to_resource_template};
+use crate::mcp::mcp_apps::routing::{
+	apply_multiplex_to_listed_resource, apply_multiplex_to_resource_template,
+};
 
 #[derive(Debug, Clone)]
 pub struct Relay {
@@ -212,9 +214,10 @@ impl Relay {
 		*req.extensions_mut() = ctx.extensions().clone();
 		let cel = crate::mcp::rbac::CelExecWrapper::new(req);
 
-		let targets = self
-			.capabilities
-			.upstreams_with_tools(&self.all_target_names());
+		#[cfg(feature = "adobe")]
+		let targets = self.capabilities.upstreams_with_tools(&self.all_target_names());
+		#[cfg(not(feature = "adobe"))]
+		let targets = self.all_target_names();
 		if targets.is_empty() {
 			return Ok(());
 		}
@@ -869,6 +872,10 @@ impl Relay {
 							upstream.to_string(),
 						))
 					};
+				// In non-Adobe builds, rewrite resource subscription notification URIs for multiplexing.
+				// Adobe builds use map_mux_outbound_message above which already handles this.
+				#[cfg(not(feature = "adobe"))]
+				let s = self.rewrite_outbound_server_messages(name.as_str(), s);
 					streams.push((name, s));
 				},
 				Err(e) => {
