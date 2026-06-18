@@ -241,7 +241,7 @@ fn rewrite_tool_ui_meta_legacy_non_ui_scheme_noop() {
 #[cfg(feature = "adobe")]
 #[test]
 fn gateway_capabilities_advertise_tasks_with_list_and_cancel_when_adobe() {
-	let caps = super::capabilities::gateway_merged_capabilities(/* multiplexing */ true);
+	let caps = super::capabilities::gateway_merged_capabilities(/* multiplexing */ true, /* resource_subscribe */ false);
 	let tasks = caps
 		.tasks
 		.as_ref()

@@ -4,17 +4,15 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use agent_core::version::BuildInfo;
 use futures_core::Stream;
 use http::StatusCode;
 use http::request::Parts;
 use itertools::Itertools;
 use rmcp::ErrorData;
 use rmcp::model::{
-	ClientJsonRpcMessage, ClientNotification, ClientRequest, Implementation, JsonRpcNotification,
-	JsonRpcRequest, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-	ListToolsRequest, ListToolsResult, ProtocolVersion, RequestId, ServerCapabilities, ServerInfo,
-	ServerJsonRpcMessage, ServerNotification, ServerResult,
+	ClientJsonRpcMessage, ClientNotification, ClientRequest, JsonRpcNotification, JsonRpcRequest,
+	ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsRequest,
+	ListToolsResult, ProtocolVersion, RequestId, ServerJsonRpcMessage, ServerResult,
 };
 use tracing::{debug, warn};
 
@@ -28,7 +26,7 @@ use crate::mcp::rewrite::{
 	apply_prompt_rewrite, apply_resource_rewrite, apply_tool_rewrite, build_flat_tool_route_index,
 	filter_flat_prompt_collisions, filter_flat_resource_collisions,
 	filter_flat_resource_template_collisions, filter_flat_tool_collisions,
-	CompiledServerRewrite, McpRewriteSet, UpstreamInstructionsMode,
+	CompiledServerRewrite, McpRewriteSet,
 };
 #[cfg(feature = "adobe")]
 use crate::mcp::rewrite::{build_flat_task_route_index, filter_flat_task_collisions};
@@ -39,91 +37,7 @@ use crate::mcp::{ClientError, FailureMode, MCPInfo, mergestream, rbac, upstream}
 use crate::proxy::httpproxy::PolicyClient;
 use crate::telemetry::log::{AsyncLog, SpanWriteOnDrop, SpanWriter};
 
-#[cfg_attr(feature = "adobe", allow(dead_code))]
-fn resource_uri(default_target_name: Option<&String>, target: &str, uri: &str) -> String {
-	if default_target_name.is_none() {
-		// Transform URI to service+scheme:// format for multiplexing
-		// e.g., "http://example.com" becomes "service+http://example.com"
-		if let Some(scheme_end) = uri.find("://") {
-			let (scheme, rest) = uri.split_at(scheme_end);
-			format!("{target}+{scheme}{rest}")
-		} else {
-			// URI must have a scheme - if not, return as-is and let validation handle it
-			uri.to_string()
-		}
-	} else {
-		uri.to_string()
-	}
-}
-
-fn rewrite_resource_update_message(
-	default_target_name: Option<&String>,
-	target: &str,
-	mut message: ServerJsonRpcMessage,
-) -> ServerJsonRpcMessage {
-	if let ServerJsonRpcMessage::Notification(notification) = &mut message
-		&& let ServerNotification::ResourceUpdatedNotification(resource_updated) =
-			&mut notification.notification
-	{
-		resource_updated.params.uri = resource_uri(
-			default_target_name,
-			target,
-			resource_updated.params.uri.as_str(),
-		);
-	}
-	message
-}
-
-fn apply_multiplex_to_listed_resource(
-	default_target_name: Option<&String>,
-	server_name: &str,
-	mut r: rmcp::model::Resource,
-	flat: bool,
-) -> rmcp::model::Resource {
-	#[cfg(feature = "adobe")]
-	{
-		r.uri = crate::mcp::mcp_apps::routing::wrap_resource_uri_mixed(
-			default_target_name,
-			server_name,
-			&r.uri,
-		);
-		if !flat {
-			r.name = multiplex_naming::resource_name(default_target_name, server_name, &r.name);
-		}
-		r
-	}
-	#[cfg(not(feature = "adobe"))]
-	{
-		let _ = flat;
-		r.uri = resource_uri(default_target_name, server_name, &r.uri);
-		r
-	}
-}
-
-fn apply_multiplex_to_resource_template(
-	default_target_name: Option<&String>,
-	server_name: &str,
-	mut rt: rmcp::model::ResourceTemplate,
-	flat: bool,
-) -> rmcp::model::ResourceTemplate {
-	#[cfg(feature = "adobe")]
-	{
-		rt.uri_template = crate::mcp::mcp_apps::routing::wrap_resource_template_uri_mixed(
-			default_target_name,
-			server_name,
-			&rt.uri_template,
-		);
-		if !flat {
-			rt.name = multiplex_naming::resource_name(default_target_name, server_name, &rt.name);
-		}
-		rt
-	}
-	#[cfg(not(feature = "adobe"))]
-	{
-		let _ = (default_target_name, server_name, flat);
-		rt
-	}
-}
+use crate::mcp::mcp_apps::routing::{apply_multiplex_to_listed_resource, apply_multiplex_to_resource_template};
 
 #[derive(Debug, Clone)]
 pub struct Relay {
@@ -132,6 +46,7 @@ pub struct Relay {
 	pub(crate) mcp_guardrails: Option<Arc<crate::mcp::guardrails::McpGuardrails>>,
 	pub(crate) policy_client: PolicyClient,
 	pub mcp_rewrite: McpRewriteSet,
+	#[cfg(feature = "adobe")]
 	pub(crate) capabilities: Arc<crate::mcp::mcp_apps::capabilities::TargetCapabilities>,
 	/// Populated by federated `tools/list` when `resourceNaming: Flat`; used by `tools/call`.
 	///
@@ -180,6 +95,7 @@ impl Relay {
 			mcp_guardrails: None,
 			policy_client: client,
 			mcp_rewrite,
+			#[cfg(feature = "adobe")]
 			capabilities: Arc::new(crate::mcp::mcp_apps::capabilities::TargetCapabilities::new()),
 			flat_tool_routes: Arc::new(RwLock::new(HashMap::new())),
 			#[cfg(feature = "adobe")]
@@ -193,6 +109,7 @@ impl Relay {
 			mcp_guardrails: self.mcp_guardrails.clone(),
 			policy_client: self.policy_client.clone(),
 			mcp_rewrite: self.mcp_rewrite.clone(),
+			#[cfg(feature = "adobe")]
 			capabilities: self.capabilities.clone(),
 			flat_tool_routes: self.flat_tool_routes.clone(),
 			#[cfg(feature = "adobe")]
@@ -203,8 +120,13 @@ impl Relay {
 	fn rewrite_outbound_server_messages(&self, target: &str, stream: Messages) -> Messages {
 		let target = target.to_string();
 		let default_target_name = self.upstreams.default_target_name.clone();
-		stream.map_server_messages(move |message| {
-			rewrite_resource_update_message(default_target_name.as_ref(), &target, message)
+		stream.map_server_messages(move |mut message| {
+			crate::mcp::mcp_apps::routing::rewrap_outbound_multiplex_server_message(
+				default_target_name.as_ref(),
+				&target,
+				&mut message,
+			);
+			message
 		})
 	}
 
@@ -639,6 +561,7 @@ impl Relay {
 
 	pub fn merge_initialize(&self, pv: ProtocolVersion, multiplexing: bool) -> Box<MergeFn> {
 		let resource_subscribe = self.upstreams.stateful();
+		#[cfg(feature = "adobe")]
 		let capabilities = self.capabilities.clone();
 		let server = self.mcp_rewrite.server.clone();
 		Box::new(move |s, _cel| {
@@ -653,7 +576,7 @@ impl Relay {
 				}
 				// If we got here in FailOpen mode, it means the only target failed.
 				// Return a default info response to keep the client session alive.
-				return Ok(Self::get_info(pv, resource_subscribe, Vec::new(), server.clone()).into());
+				return Ok(Self::get_info(pv, multiplexing, resource_subscribe, Vec::new(), server.clone()).into());
 			}
 
 			// Multiplexing is more complex. We need to find the lowest protocol version
@@ -663,6 +586,7 @@ impl Relay {
 
 			for (server_name, v) in s {
 				if let ServerResult::InitializeResult(r) = v {
+					#[cfg(feature = "adobe")]
 					if multiplexing {
 						capabilities.store(server_name.as_str(), r.capabilities.clone());
 					}
@@ -677,7 +601,7 @@ impl Relay {
 				}
 			}
 
-			Ok(Self::get_info(lowest_version, resource_subscribe, upstream_instructions, server.clone()).into())
+			Ok(Self::get_info(lowest_version, multiplexing, resource_subscribe, upstream_instructions, server.clone()).into())
 		})
 	}
 
@@ -1209,66 +1133,18 @@ impl Relay {
 
 	fn get_info(
 		pv: ProtocolVersion,
+		multiplexing: bool,
 		resource_subscribe: bool,
 		upstream_instructions: Vec<(String, String)>,
 		server: Option<CompiledServerRewrite>,
-	) -> ServerInfo {
-		let capabilities = {
-			let mut builder = ServerCapabilities::builder()
-				.enable_tools()
-				.enable_tool_list_changed()
-				.enable_prompts()
-				.enable_prompts_list_changed()
-				.enable_resources()
-				.enable_resources_list_changed();
-			if resource_subscribe {
-				builder = builder.enable_resources_subscribe();
-			}
-			builder.build()
-		};
-		let gateway_preamble = server
-			.as_ref()
-			.and_then(|s| s.instructions.clone())
-			.unwrap_or_else(|| {
-				"This server is a gateway to a set of mcp servers. It is responsible for routing requests to the correct server and aggregating the results.".to_string()
-			});
-		let instructions = match server.as_ref().map(|s| s.upstream_instructions) {
-			Some(UpstreamInstructionsMode::Replace) => Some(gateway_preamble),
-			Some(UpstreamInstructionsMode::Prepend) => {
-				if upstream_instructions.is_empty() {
-					Some(gateway_preamble)
-				} else {
-					let mut merged = gateway_preamble;
-					for (server_name, instruction) in &upstream_instructions {
-						merged.push_str(&format!("\n\n[{server_name}]\n{instruction}"));
-					}
-					Some(merged)
-				}
-			},
-			_ => {
-				if upstream_instructions.is_empty() {
-					Some(gateway_preamble)
-				} else {
-					let mut merged = gateway_preamble;
-					for (server_name, instruction) in &upstream_instructions {
-						merged.push_str(&format!("\n\n[{server_name}]\n{instruction}"));
-					}
-					Some(merged)
-				}
-			},
-		};
-		let server_name = server
-			.as_ref()
-			.and_then(|s| s.name.clone())
-			.unwrap_or_else(|| "agentgateway".to_string());
-		let server_version = server
-			.as_ref()
-			.and_then(|s| s.version.clone())
-			.unwrap_or_else(|| BuildInfo::new().version.to_string());
-		ServerInfo::new(capabilities)
-			.with_protocol_version(pv)
-			.with_server_info(Implementation::new(server_name, server_version))
-			.with_instructions(instructions.unwrap_or_default())
+	) -> rmcp::model::ServerInfo {
+		crate::mcp::mcp_apps::server_info::build_server_info(
+			pv,
+			multiplexing,
+			resource_subscribe,
+			upstream_instructions,
+			server,
+		)
 	}
 
 	pub fn all_target_names(&self) -> Vec<String> {

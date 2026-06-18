@@ -70,13 +70,21 @@ impl TargetCapabilities {
 /// Prefix mode uses `target_`-prefixed names; Flat mode uses bare upstream ids with a
 /// gateway route index. Resources use federated URI wrapping in
 /// [`crate::mcp::mcp_apps::routing`].
-pub(crate) fn gateway_merged_capabilities(multiplexing: bool) -> ServerCapabilities {
+pub(crate) fn gateway_merged_capabilities(
+	multiplexing: bool,
+	resource_subscribe: bool,
+) -> ServerCapabilities {
 	let b = ServerCapabilities::builder()
 		.enable_tools()
 		.enable_prompts()
 		.enable_resources();
 	let b = if multiplexing {
 		b.enable_tool_list_changed()
+	} else {
+		b
+	};
+	let b = if resource_subscribe {
+		b.enable_resources_subscribe()
 	} else {
 		b
 	};
