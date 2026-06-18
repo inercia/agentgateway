@@ -106,14 +106,19 @@ python3 "$SKILL_DIR/scripts/land_pr.py" "$REPO" \
   --reason manual-land
 ```
 
-Parse JSON on stdout: `landed`, `pr_state_after`, `comment_posted`,
+Parse JSON on stdout: `landed`, `landed_via`,
+`landed_confirmed_by_ancestry`, `pr_state_after`, `comment_posted`,
 `pr_closed`, `local_adobe_updated`, `errors`.
 
-If `landed` is false, stop — surface `errors` (freshness mismatch,
-`403`/`422` from GitHub, etc.).
+The authoritative success signal is `landed_confirmed_by_ancestry`
+(`adobe` now points at the PR head SHA), not `pr_state_after`. If it is
+false, stop — surface `errors` (freshness mismatch, `403`/`422` from
+GitHub, etc.).
 
-If GitHub auto-merged the PR after the force-update, `pr_state_after`
-may be `MERGED` and `pr_closed` stays false — that is OK.
+PR state after landing depends on GitHub: if it auto-detects the merge,
+`pr_state_after` is `MERGED` and `pr_closed` stays false; otherwise the
+script closes it and `pr_state_after` is `CLOSED`. **Both are expected**
+for a force-push land — CLOSED is not a failure.
 
 ### 2.7 Report and continue
 

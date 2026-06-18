@@ -303,6 +303,17 @@ then **re-invokes** `land PR #N`. Set dispatcher loop to STOP.
 
 ## 10. Push, open PR, auto-land (happy path)
 
+**Pre-push guard** — verify the working tree is clean before pushing
+(same check as `batch-and-yolo.md` step 7):
+
+```bash
+git -C "$REPO" diff HEAD --stat
+```
+
+If non-empty, stop and surface the outstanding files. Stage and commit
+them (and re-run tests if the content is non-trivial) before
+proceeding.
+
 Push:
 
 ```bash

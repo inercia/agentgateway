@@ -13,7 +13,12 @@ Usage:
         [--comment-body \"...\"] [--skip-comment] [--skip-close] [--skip-local-reset]
 
 Emits JSON on stdout:
-    landed, pr_state_after, comment_posted, pr_closed, local_adobe_updated, errors[]
+    landed, landed_via, landed_confirmed_by_ancestry, pr_state_after,
+    comment_posted, pr_closed, local_adobe_updated, errors[]
+
+Landing success is authoritative via `landed_confirmed_by_ancestry` (adobe
+now points at head_sha), NOT via `pr_state_after`. A force-push land ending
+CLOSED rather than MERGED is the expected terminal state.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 
 def run(cmd: list[str]) -> tuple[int, str, str]:
@@ -74,6 +80,8 @@ def main() -> int:
 
     out: dict = {
         "landed": False,
+        "landed_via": None,
+        "landed_confirmed_by_ancestry": False,
         "pr_state_after": None,
         "comment_posted": False,
         "pr_closed": False,
@@ -107,6 +115,24 @@ def main() -> int:
         return 1
 
     out["landed"] = True
+    out["landed_via"] = "force-push"
+
+    # Authoritative landing confirmation: a force-push land can NEVER be
+    # detected as MERGED reliably (no merge commit / squash on the base), so
+    # PR state is not the source of truth — ancestry is. Re-read the remote
+    # ref: if refs/heads/adobe now points at head_sha, the PR's commits are on
+    # adobe, full stop. The PR ending CLOSED rather than MERGED is the expected
+    # terminal state for this flow, not an error.
+    rc, landed_adobe, aerr = gh_api(
+        ["repos/Adobe-Apis/agentgateway/git/refs/heads/adobe", "--jq", ".object.sha"]
+    )
+    if rc == 0 and landed_adobe.lower() == head_sha:
+        out["landed_confirmed_by_ancestry"] = True
+    else:
+        out["errors"].append(
+            "could not confirm adobe now points at head_sha after PATCH "
+            f"(read {landed_adobe.lower()!r}, expected {head_sha!r}): {aerr}"
+        )
 
     # Landing comment
     if not args.skip_comment:
@@ -147,31 +173,40 @@ def main() -> int:
         else:
             out["comment_posted"] = True
 
-    # PR state after land
-    rc, state_json, serr = run(
-        [
-            "gh",
-            "pr",
-            "view",
-            str(pr),
-            "--repo",
-            "Adobe-Apis/agentgateway",
-            "--json",
-            "state",
-        ]
-    )
-    if rc != 0:
-        out["errors"].append(f"gh pr view failed: {serr}")
-        print(json.dumps(out, indent=2))
-        return 0 if out["landed"] else 1
+    # PR state after land — poll briefly so GitHub has time to auto-detect the
+    # force-push as a merge before we fall back to explicit close.
+    state = ""
+    for attempt in range(4):
+        if attempt > 0:
+            time.sleep(3)
+        rc, state_json, serr = run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr),
+                "--repo",
+                "Adobe-Apis/agentgateway",
+                "--json",
+                "state",
+            ]
+        )
+        if rc != 0:
+            out["errors"].append(f"gh pr view failed: {serr}")
+            print(json.dumps(out, indent=2))
+            return 0 if out["landed"] else 1
+        try:
+            state = (json.loads(state_json).get("state") or "").upper()
+        except json.JSONDecodeError:
+            state = ""
+        if state in ("MERGED", "CLOSED"):
+            break
 
-    try:
-        state_obj = json.loads(state_json)
-        state = (state_obj.get("state") or "").upper()
-    except json.JSONDecodeError:
-        state = ""
     out["pr_state_after"] = state or None
 
+    # If GitHub still shows OPEN after polling, close it ourselves. This is
+    # expected: the commits are confirmed on adobe by ancestry above, so CLOSED
+    # is the correct terminal state for a force-push land — not a failure.
     if not args.skip_close and state == "OPEN":
         rc, _, cerr = run(
             ["gh", "pr", "close", str(pr), "--repo", "Adobe-Apis/agentgateway"]
@@ -180,6 +215,7 @@ def main() -> int:
             out["errors"].append(f"gh pr close failed: {cerr}")
         else:
             out["pr_closed"] = True
+            out["pr_state_after"] = "CLOSED"
 
     if not args.skip_local_reset:
         rc, _, ferr = run(["git", "-C", repo, "fetch", "origin", "adobe"])
