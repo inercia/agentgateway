@@ -254,7 +254,7 @@ When rebase reports "successfully rebased and updated", continue.
 ## 9. Run tests
 
 ```bash
-python3 "$SKILL_DIR/scripts/run_tests.py" "$REPO" auto-resolved \
+PATH="$HOME/.cargo/bin:$PATH" python3 "$SKILL_DIR/scripts/run_tests.py" "$REPO" auto-resolved \
   --log-dir "$TMP_DIR" --retry-once \
   --output "$TMP_DIR/run_tests_auto_resolved.json"
 ```

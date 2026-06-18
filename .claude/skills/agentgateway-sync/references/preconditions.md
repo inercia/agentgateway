@@ -2,6 +2,20 @@
 
 Load this on every invocation before doing anything mutating. If any check fails, stop and tell the user exactly what to fix. Do not try to proceed through auth/config problems.
 
+## Environment preflight (run once per invocation)
+
+The local dev environment is **macOS (darwin)** with a non-login shell that does **not** inherit `cargo` on `PATH`. Two recurring failure classes come from this:
+
+1. **`make: cargo: No such file or directory`** — `run_tests.py` shells out to `make test`, which needs `cargo`. Resolve it once and reuse:
+
+   ```bash
+   command -v cargo >/dev/null 2>&1 || export PATH="$HOME/.cargo/bin:$PATH"
+   ```
+
+   Because exported shell state does **not** persist between Bash tool calls, prefix every `run_tests.py` invocation with `PATH="$HOME/.cargo/bin:$PATH"` (e.g. `PATH="$HOME/.cargo/bin:$PATH" python3 .../run_tests.py …`).
+
+2. **macOS coreutils gaps** — `tac` does **not** exist (use `tail -r`); `grep -P` is unavailable (use `grep -E`). When you need to reverse a SHA list to oldest-first, prefer Python (`python3 -c "import sys; print('\n'.join(reversed(sys.stdin.read().split())))"`) over `tac`.
+
 ## 0. Git remotes (agents / fresh clones)
 
 Before trusting `inspect_state.py`, normalize `origin`, `upstream`, and optional `public`:
