@@ -193,9 +193,14 @@ to full bisection.
 
 ---
 
-The first action for full bisection is *always* abort — no manual
-conflict resolution inside batch mode. Manual triage happens on the
-single-commit follow-up PR.
+The first action for full bisection is *always* abort — **no manual
+conflict resolution inside batch mode, ever**. The only in-place
+resolution allowed in batch mode is the `resource.pb.go` fast-path
+(§5b.0). Every other conflict — regardless of how superficial it looks
+— goes through abort → bisect → auto-resolve. Resolving by hand inside
+a batch rebase produces a structurally incorrect branch (wrong merge
+base, GitHub "conflicts" indicator, verify_branch_shape failure) and
+must not be done without explicit user approval.
 
 ```bash
 git -C "$REPO" rebase --abort

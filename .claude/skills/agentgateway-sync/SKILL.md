@@ -111,6 +111,19 @@ The user invoked landing directly — a PR is already open and they want it land
    ```
 3. Report: unsynced count, oldest commit, any open sync PRs with their age. Do not mutate.
 
+## Flow discipline — never deviate silently
+
+The scripts and reference documents are the authority. Do **not** improvise, shortcut, or reorder steps. If you find yourself considering a deviation — for any reason — **stop and ask the user first**. Common temptations that are explicitly forbidden without user approval:
+
+- Manually resolving a batch-rebase conflict instead of aborting → bisecting → auto-resolving.
+- Skipping `verify_branch_shape.py` because the rebase "looks right".
+- Treating the risk classifier as a gate (it is **informational only** — `batch-and-yolo.md` §2).
+- Halting auto-land because of a `critical` classifier result when both rebase and tests passed.
+- Running ad-hoc `git cherry-pick` or `git rebase --onto` instead of the documented commands.
+- Composing or editing PR bodies by hand instead of using `compose_pr_body.py`.
+
+If the skill flow produces an unexpected result or a script fails, surface the error to the user and wait for guidance. Do **not** paper over it with manual steps.
+
 ## Red flags — stop rather than push through
 
 These apply across all paths. Any one of them means stop and surface to the user; never auto-recover.
