@@ -6,7 +6,8 @@ use percent_encoding::NON_ALPHANUMERIC;
 use percent_encoding::percent_decode_str;
 use percent_encoding::utf8_percent_encode;
 use rmcp::model::{
-	Content, Meta, RawContent, ResourceContents, ServerJsonRpcMessage, ServerNotification,
+	Content, Meta, RawContent, Resource, ResourceContents, ResourceTemplate, ServerJsonRpcMessage,
+	ServerNotification,
 };
 use serde_json::Value;
 
@@ -278,5 +279,64 @@ pub fn rewrap_read_resource_contents(
 				*uri = wrap_resource_uri_mixed(default_target_name, target, uri);
 			},
 		}
+	}
+}
+
+/// Non-Adobe URI transformation: `service+scheme://...` format.
+#[cfg_attr(feature = "adobe", allow(dead_code))]
+fn resource_uri(default_target_name: Option<&String>, target: &str, uri: &str) -> String {
+	if default_target_name.is_none() {
+		if let Some(scheme_end) = uri.find("://") {
+			let (scheme, rest) = uri.split_at(scheme_end);
+			format!("{target}+{scheme}{rest}")
+		} else {
+			uri.to_string()
+		}
+	} else {
+		uri.to_string()
+	}
+}
+
+pub(crate) fn apply_multiplex_to_listed_resource(
+	default_target_name: Option<&String>,
+	server_name: &str,
+	mut r: Resource,
+	flat: bool,
+) -> Resource {
+	#[cfg(feature = "adobe")]
+	{
+		r.uri = wrap_resource_uri_mixed(default_target_name, server_name, &r.uri);
+		if !flat {
+			r.name = resource_name(default_target_name, server_name, &r.name);
+		}
+		r
+	}
+	#[cfg(not(feature = "adobe"))]
+	{
+		let _ = flat;
+		r.uri = resource_uri(default_target_name, server_name, &r.uri);
+		r
+	}
+}
+
+pub(crate) fn apply_multiplex_to_resource_template(
+	default_target_name: Option<&String>,
+	server_name: &str,
+	mut rt: ResourceTemplate,
+	flat: bool,
+) -> ResourceTemplate {
+	#[cfg(feature = "adobe")]
+	{
+		rt.uri_template =
+			wrap_resource_template_uri_mixed(default_target_name, server_name, &rt.uri_template);
+		if !flat {
+			rt.name = resource_name(default_target_name, server_name, &rt.name);
+		}
+		rt
+	}
+	#[cfg(not(feature = "adobe"))]
+	{
+		let _ = (default_target_name, server_name, flat);
+		rt
 	}
 }
