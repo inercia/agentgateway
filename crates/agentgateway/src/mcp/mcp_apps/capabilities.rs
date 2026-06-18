@@ -79,7 +79,13 @@ pub(crate) fn gateway_merged_capabilities(
 		.enable_prompts()
 		.enable_resources();
 	let b = if multiplexing {
+		// Advertise list_changed for the aggregated tool/prompt/resource lists only when
+		// federating multiple upstreams — that is the only mode in which the gateway's
+		// merged lists can actually change. Matches upstream #2115 (which enables these
+		// unconditionally), gated behind multiplexing like tool_list_changed.
 		b.enable_tool_list_changed()
+			.enable_prompts_list_changed()
+			.enable_resources_list_changed()
 	} else {
 		b
 	};
