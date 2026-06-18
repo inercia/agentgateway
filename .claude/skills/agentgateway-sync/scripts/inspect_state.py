@@ -360,6 +360,8 @@ def main() -> int:
     state["batch_end_sha"] = None
     state["batch_end_short_sha"] = None
     state["batch_commits"] = []
+    state["batch_non_standard_commits"] = []
+    state["batch_has_non_standard_merge"] = False
 
     if upstream_ok and state.get("unsynced_count"):
         effective_count = min(args.count, state["unsynced_count"])
@@ -394,6 +396,18 @@ def main() -> int:
             if commits:
                 state["batch_end_sha"] = commits[-1]["sha"]
                 state["batch_end_short_sha"] = commits[-1]["short_sha"]
+
+            # Non-standard merge detection: a standard upstream squash-merge
+            # ends in (#NNNN). A commit lacking it means upstream did a
+            # non-squash / rebase merge — Shape D's verbatim-SHA assumptions
+            # are shakier and the batch should be reviewed before landing.
+            non_standard = [
+                {"sha": c["sha"], "short_sha": c["short_sha"], "subject": c["subject"]}
+                for c in commits
+                if c["pr_num"] is None
+            ]
+            state["batch_non_standard_commits"] = non_standard
+            state["batch_has_non_standard_merge"] = bool(non_standard)
 
     rc, out, err = gh("api", "repos/Adobe-Apis/agentgateway", "--jq", ".full_name")
     state["adobe_apis_reachable"] = (rc == 0 and out == "Adobe-Apis/agentgateway")

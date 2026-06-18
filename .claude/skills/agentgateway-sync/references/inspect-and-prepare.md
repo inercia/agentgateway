@@ -26,6 +26,21 @@ If `batch_count == 0`, fall through to the "nothing to sync" path below — ther
 If `batch_count >= 1`, route to **`references/batch-and-yolo.md`** after the
 switch/ff section below.
 
+### Non-standard merge gate (halt)
+
+`inspect_state.py` flags any batch commit whose subject lacks a trailing
+`(#NNNN)` — a non-standard merge (non-squash / rebased upstream history)
+where Shape D's verbatim-SHA assumptions are unreliable:
+
+- `batch_has_non_standard_merge` — boolean.
+- `batch_non_standard_commits` — `[{sha, short_sha, subject}]`.
+
+**If `batch_has_non_standard_merge == true`, stop.** This is the
+SKILL.md red flag "upstream commit subject has no `(#NNNN)` suffix".
+Surface every entry in `batch_non_standard_commits` and let the user
+decide whether to sync up to (but not including) the first non-standard
+commit, or handle it manually. Do not auto-batch past it.
+
 ## Classify the batch (informational only)
 
 After `inspect_state.py` returns successfully and `batch_count > 0`, run **one** Bash invocation:
@@ -82,6 +97,32 @@ Expected shape (annotated):
 **If `working_tree_clean == false`**, surface the `working_tree_preview` lines (up to 10 entries from `git status --porcelain`) and stop. Never auto-stash or auto-commit — the user may have in-progress work.
 
 **If `unsynced_count == 0`**, report "nothing to sync" and stop.
+
+## Stale-branch cleanup (preflight, best-effort)
+
+Once per top-level invocation (not per loop iteration), prune `sync/*`
+branches that are provably done — landed PRs, abandoned attempts, the
+throwaway `sync-bisect-tmp`. This keeps `pick_sync_branch.py` from
+reaching for `-1`/`-2` suffixes and keeps the checkout navigable.
+
+First a dry run to see what would go:
+
+```bash
+python3 "$SKILL_DIR/scripts/prune_stale_branches.py" "$REPO"
+```
+
+Parse JSON (`candidates[]` with per-branch `reason`). The script only
+ever targets `sync/*` and `sync-bisect-tmp`, never `adobe` / the current
+HEAD / `skill/*`. A local branch with no PR is deleted only when it is an
+ancestor of `adobe`; a remote branch is deleted only when its PR is
+MERGED/CLOSED. If the candidates look right, apply:
+
+```bash
+python3 "$SKILL_DIR/scripts/prune_stale_branches.py" "$REPO" --apply
+```
+
+This is best-effort: individual delete failures land in `errors` but do
+not stop the sync. Skip the cleanup entirely if `gh` is unavailable.
 
 ## Switch to `adobe` and fast-forward
 

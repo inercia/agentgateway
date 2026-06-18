@@ -97,6 +97,8 @@ same logic as single-commit mode). Tell the user the picked name.
 
 ```bash
 python3 "$SKILL_DIR/scripts/run_tests.py" "$REPO" baseline --log-dir "$TMP_DIR" \
+  --cache-file "$TMP_DIR/test_cache.json" \
+  --cache-key "$(git -C "$REPO" rev-parse adobe)" \
   --output "$TMP_DIR/run_tests_baseline.json"
 ```
 
@@ -104,6 +106,13 @@ Same expectations as the per-commit flow: `all_passed: true`, zero
 failures, zero warnings. If the baseline is dirty, **stop** — the fork
 must have a clean baseline before any sync attempt. Surface the `tail`
 field if present.
+
+**Cache:** `--cache-key` is the current `adobe` SHA. On the second and
+later loop iterations within one invocation, `adobe` equals the synced
+tip that the previous iteration landed — which step 6 already cached as
+a passing run. The baseline then returns `"cached": true` and skips a
+full `make test`. A cache miss (first iteration, or `adobe` moved out of
+band) runs normally. Treat a cached result exactly like a fresh pass.
 
 Retain **`$TMP_DIR/run_tests_baseline.json`** for **`compose_pr_body.py --merge`**
 (step 8).
@@ -128,13 +137,65 @@ upstream commits at the base, Adobe commits reapplied on top.
 ### Branch on rebase outcome
 
 - **Clean rebase:** continue to step 6 (post-rebase tests).
-- **Conflict:** abort and bisect. Continue at "Conflict path" below.
+- **Conflict:** check fast-path first (below), then abort and bisect.
 
 ## Step 5b. Conflict path (gate 1 failed)
 
-The first action is *always* abort — no manual conflict resolution
-inside batch mode. Manual triage happens on the single-commit follow-up
-PR.
+### 5b.0 — Fast-path: `resource.pb.go`-only conflict
+
+Before aborting and running the full bisection, check whether the
+conflict is resolvable in-place without bisecting. This covers the most
+common recurring pattern in this fork: every upstream MCP commit that
+adds types regenerates `api/resource.pb.go`, conflicting with Adobe's
+McpRewrite additions. Bisection is expensive (multiple full
+rebase+abort cycles); the fast-path tries to resolve the whole batch in
+one pass.
+
+**Condition to attempt the fast-path:** the *only* conflicting file is
+`api/resource.pb.go` and `crates/protos/proto/resource.proto` has no
+conflict markers:
+
+```bash
+git -C "$REPO" status --porcelain | awk '/^UU/{print $2}'
+# must output only: api/resource.pb.go
+
+grep -c "<<<<<<<" "$REPO/crates/protos/proto/resource.proto" 2>/dev/null || echo 0
+# must output 0
+```
+
+If both conditions hold, attempt a regeneration loop **without
+aborting**:
+
+```bash
+PATH="./tools:$PATH" buf generate --path crates/protos/proto/resource.proto
+git -C "$REPO" add api/resource.pb.go api/resource_json.gen.go
+git -C "$REPO" rebase --continue
+```
+
+The rebase may stop again if another Adobe commit also conflicts.
+Each time it stops, re-check: if **still** only `api/resource.pb.go`
+(proto clean) → regenerate + stage + continue. Loop until the rebase
+either:
+
+- **Completes** — fast-path succeeded, skip bisection, continue to
+  step 6 with the full `batch_count`.
+- **Stops with a different conflict file** — fast-path cannot handle
+  this. Abort:
+  ```bash
+  git -C "$REPO" rebase --abort
+  git -C "$REPO" switch adobe
+  git -C "$REPO" branch -D "sync/batch-<count>-to-<sha>"
+  ```
+  Fall through to full bisection below.
+
+**If fast-path conditions are not met from the start**, skip directly
+to full bisection.
+
+---
+
+The first action for full bisection is *always* abort — no manual
+conflict resolution inside batch mode. Manual triage happens on the
+single-commit follow-up PR.
 
 ```bash
 git -C "$REPO" rebase --abort
@@ -199,11 +260,35 @@ Land the clean prefix, then attempt to auto-resolve the conflicting
 commit. This is the path that turns "stop and wake the user" into
 "keep going unless something genuinely needs human attention."
 
-1. **Reset batch metadata** — treat the batch as the clean prefix:
+1. **Reset batch metadata and re-inspect** — treat the batch as the
+   clean prefix:
    - `batch_count := clean_count`
    - `batch_end_sha := clean_end_sha`
    - `batch_end_short_sha := clean_end_short_sha`
    - `batch_commits` truncated to first `clean_count` entries
+
+   **Re-run `inspect_state.py` with the prefix count** so the saved
+   `inspect.json` reflects only the commits that will actually land.
+   This is the file `compose_pr_body.py` reads for the commit table —
+   if it still holds the full batch, the PR title will say "4 commits"
+   but the body will list 12:
+
+   ```bash
+   python3 "$SKILL_DIR/scripts/inspect_state.py" "$REPO" \
+     --count <clean_count> > "$TMP_DIR/inspect.json"
+   ```
+
+   **Also filter `classify.json`** to only the prefix SHAs. The
+   simplest approach: keep the existing classification results but drop
+   rows for commits outside the prefix (they will be classified again
+   when their batch runs):
+
+   ```python
+   prefix_shas = {c["sha"] for c in batch_commits[:clean_count]}
+   filtered = {**classify_data, "commits": [c for c in classify_data["commits"] if c["sha"] in prefix_shas]}
+   # write to $TMP_DIR/classify.json
+   ```
+
 2. **Re-pick the sync branch name** with the new (smaller) count and
    end-sha (the original `sync/batch-<N>-to-<sha>` branch was never
    created since the bisect script cleaned up after itself):
@@ -244,15 +329,65 @@ stop. Don't attempt a third rebase.
 
 ```bash
 python3 "$SKILL_DIR/scripts/run_tests.py" "$REPO" synced --log-dir "$TMP_DIR" --retry-once \
+  --cache-file "$TMP_DIR/test_cache.json" \
+  --cache-key "$(git -C "$REPO" rev-parse HEAD)" \
   --output "$TMP_DIR/run_tests_synced.json"
 ```
+
+`--cache-key` is the synced branch tip (`HEAD`). When this batch lands,
+`land_pr.py` force-updates `adobe` to exactly this SHA, so the next
+iteration's step-4 baseline (keyed on `adobe`) hits this cache entry
+and skips re-running. The cache only ever stores passing runs.
 
 Compare against baseline. Parse JSON: if `all_passed` is false **after**
 `retry_passed` is false (or `retry_passed` is null because `retry_errors`
 occurred), follow **Test failure path** below. If `needed_retry` is true and
 the final run passed, note "(retry)" in the landing comment / PR archive.
 
-## Step 7. Push the sync branch
+## Step 7. Pre-push guard + push the sync branch
+
+**Before pushing, verify the working tree is clean.** Uncommitted
+changes at this point mean a conflict resolution or manual edit was
+applied but never staged+committed — pushing would leave those fixes
+off the branch and break `adobe` after landing (this was the root
+cause of the PR #75 / #76 incident).
+
+```bash
+git -C "$REPO" diff HEAD --stat
+```
+
+If the output is non-empty (any modified or staged files), **stop**:
+
+> Pre-push guard: working tree is not clean. Stage and commit the
+> outstanding changes before pushing. Outstanding files:
+> `<list from diff --stat>`
+
+Do not push. Do not auto-land. Fix the working tree first (stage the
+changes, `git commit --amend` or a new commit, re-run tests if the
+added content is non-trivial), then continue.
+
+**Then verify branch shape (Shape D integrity + commit count).** This
+asserts the upstream batch commits are carried *verbatim* and that the
+branch matches the count the PR body will claim — catching the PR #75
+(rewritten upstream commit) and PR #81 (count drift) incident classes
+before they reach `origin`:
+
+```bash
+python3 "$SKILL_DIR/scripts/verify_branch_shape.py" "$REPO" \
+  --head HEAD \
+  --expected-shas "<comma-joined batch_commits[*].sha>" \
+  --expected-count <batch_count>
+```
+
+`--expected-count` must be the same `batch_count` the PR body is
+composed from (step 8's `inspect.json`). Parse JSON: if `ok` is false,
+**stop** and surface `errors` — do not push. A `missing_shas` entry
+means the rebase rewrote an upstream commit; a `count_match: false`
+means the branch and the body disagree on how many upstream commits
+landed.
+
+Only when both the uncommitted-changes guard and `verify_branch_shape.py`
+pass, push:
 
 ```bash
 git push -u origin "sync/batch-<count>-to-<short_sha>"
@@ -330,10 +465,15 @@ python3 "$SKILL_DIR/scripts/land_pr.py" "$REPO" \
   --reason auto-batch
 ```
 
-Parse the JSON on stdout. If `landed` is false or `errors` is non-empty
-with a freshness mismatch / PATCH failure, **stop** and surface —
-re-run sync if `adobe` moved. Force-flag details live in the script
-docstring (always `-F force=true`, never `-f force=true`).
+Parse the JSON on stdout. The authoritative success signal is
+**`landed_confirmed_by_ancestry: true`** (`adobe` now points at the PR
+head SHA) — **not** `pr_state_after`. A force-push land cannot be
+reliably auto-detected as a merge, so the PR ending **`CLOSED`** rather
+than `MERGED` is the expected, correct terminal state; do not treat
+CLOSED as a failure. If `landed_confirmed_by_ancestry` is false, or
+`errors` carries a freshness mismatch / PATCH failure, **stop** and
+surface — re-run sync if `adobe` moved. Force-flag details live in the
+script docstring (always `-F force=true`, never `-f force=true`).
 
 Archive to `$REPORTS_DIR/<sync-branch-without-prefix>/` — same as
 `push-and-open-pr.md` step 6, with the report noting "auto-landed
@@ -341,8 +481,9 @@ Archive to `$REPORTS_DIR/<sync-branch-without-prefix>/` — same as
 
 ## Step 10. Leave `sync/*` behind — checkout `adobe`, delete landed branch
 
-After **`land_pr.py` stdout shows `"landed": true`** (and you have recorded any
-archive): integration tip is **`adobe`**; the **`sync/*`** branch is disposable.
+After **`land_pr.py` stdout shows `"landed_confirmed_by_ancestry": true`** (and
+you have recorded any archive): integration tip is **`adobe`**; the **`sync/*`**
+branch is disposable.
 
 1. Capture the sync branch name **before** leaving it (you should still be on it):
 

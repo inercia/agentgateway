@@ -3,6 +3,7 @@
 
 Usage:
     python3 run_tests.py <repo_path> <label> [--log-dir <dir>] [--output <file>] [--retry-once]
+        [--cache-file <file> --cache-key <sha>]
 
 `<label>` is used to name the log file: <log_dir>/agw_make_test_<label>.log.
 Typical labels: `baseline` (before rebase), `synced` (after rebase).
@@ -13,8 +14,18 @@ Typical labels: `baseline` (before rebase), `synced` (after rebase).
 `needed_retry`, `retry_passed`, `retry_label`, and top-level counts from the
 final attempt (retry when present, else first).
 
+`--cache-file` + `--cache-key`: skip `make test` entirely when a previous
+passing run is cached under the same key. The key is a content identity for
+the tree under test (the skill passes `git rev-parse adobe` for `baseline`
+and `git rev-parse HEAD` for `synced`). Across batch iterations the synced
+tip of iteration N becomes `adobe` after landing, so iteration N+1's baseline
+key matches the synced cache written by iteration N — eliminating one full
+`make test` per batch. A cache HIT emits the stored result with
+`"cached": true`; any miss runs normally and, on success (`all_passed`),
+rewrites the cache `{key, result}`. Only passing runs are ever cached.
+
 Exit status:
-    0 — tests ran (check `all_passed` field in JSON for pass/fail)
+    0 — tests ran or cache hit (check `all_passed` field in JSON for pass/fail)
     1 — couldn't run tests at all (bad path, make not found, I/O error)
 """
 
@@ -33,6 +44,37 @@ COUNT_RE = re.compile(
     r"test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored"
 )
 WARNING_RE = re.compile(r"^warning:", re.MULTILINE)
+
+
+def _cache_read(cache_file: str, cache_key: str) -> dict[str, Any] | None:
+    """Return a cached passing result for `cache_key`, or None on any miss."""
+    try:
+        with open(cache_file, encoding="utf-8") as fh:
+            cache = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(cache, dict):
+        return None
+    if cache.get("key") != cache_key:
+        return None
+    result = cache.get("result")
+    if not isinstance(result, dict) or not result.get("all_passed"):
+        return None
+    return result
+
+
+def _cache_write(cache_file: str, cache_key: str, result: dict[str, Any]) -> None:
+    """Persist a passing result under `cache_key`. Best-effort; never raises."""
+    if not result.get("all_passed"):
+        return
+    try:
+        cd = os.path.dirname(cache_file)
+        if cd:
+            os.makedirs(cd, exist_ok=True)
+        with open(cache_file, "w", encoding="utf-8") as fh:
+            json.dump({"key": cache_key, "result": result}, fh, indent=2)
+    except OSError:
+        pass
 
 
 def _run_once(repo: str, label: str, log_dir: str, env: dict[str, str]) -> dict[str, Any]:
@@ -104,11 +146,36 @@ def main() -> int:
         action="store_true",
         help="If first run fails all_passed, run once more with <label>-retry log",
     )
+    ap.add_argument("--cache-file", default=None, help="JSON cache of the last passing run")
+    ap.add_argument(
+        "--cache-key",
+        default=None,
+        help="Content identity for the tree under test (e.g. git rev-parse adobe/HEAD)",
+    )
     args = ap.parse_args()
 
     if not os.path.isdir(args.repo):
         print(json.dumps({"errors": [f"{args.repo} does not exist"]}, indent=2))
         return 1
+
+    cache_enabled = bool(args.cache_file and args.cache_key)
+
+    if cache_enabled:
+        hit = _cache_read(args.cache_file, args.cache_key)
+        if hit is not None:
+            result = dict(hit)
+            result["cached"] = True
+            result["cache_key"] = args.cache_key
+            output = json.dumps(result, indent=2)
+            if args.output:
+                od = os.path.dirname(args.output)
+                if od:
+                    os.makedirs(od, exist_ok=True)
+                with open(args.output, "w", encoding="utf-8") as fh:
+                    fh.write(output + "\n")
+            else:
+                print(output)
+            return 0
 
     env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_TOKEN", "GH_TOKEN")}
 
@@ -143,6 +210,7 @@ def main() -> int:
     result["needed_retry"] = needed_retry
     result["retry_passed"] = retry_passed
     result["retry_label"] = retry_label
+    result["cached"] = False
     if needed_retry and second is not None:
         result["first_attempt"] = {
             k: first[k]
@@ -161,6 +229,9 @@ def main() -> int:
         }
         if not first["all_passed"] and "tail" in first:
             result["first_attempt"]["tail"] = first["tail"]
+
+    if cache_enabled:
+        _cache_write(args.cache_file, args.cache_key, result)
 
     output = json.dumps(result, indent=2)
     if args.output:
