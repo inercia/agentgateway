@@ -10,10 +10,12 @@ use http::request::Parts;
 use itertools::Itertools;
 use rmcp::ErrorData;
 use rmcp::model::{
-	ClientJsonRpcMessage, ClientNotification, ClientRequest, JsonRpcNotification, JsonRpcRequest,
+	ClientNotification, ClientRequest, JsonRpcNotification, JsonRpcRequest,
 	ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsRequest,
 	ListToolsResult, ProtocolVersion, RequestId, ServerJsonRpcMessage, ServerResult,
 };
+#[cfg(feature = "adobe")]
+use rmcp::model::ClientJsonRpcMessage;
 use tracing::{debug, warn};
 
 use crate::http::Response;
@@ -207,13 +209,8 @@ impl Relay {
 		if !self.flat_tool_routes.read().is_empty() {
 			return Ok(());
 		}
-		// Reconstruct a minimal CEL context from the incoming request so the merge
-		// closure applies the same policy filter as a client-issued tools/list.
-		let mut req: ::http::Request<()> = ::http::Request::new(());
-		*req.headers_mut() = ctx.headers().clone();
-		*req.extensions_mut() = ctx.extensions().clone();
-		let cel = crate::mcp::rbac::CelExecWrapper::new(req);
-
+		// send_fanout_to derives the per-request CEL context from `ctx` and supplies it to
+		// the merge closure at invocation (upstream #1842 model), so no local cel is needed.
 		#[cfg(feature = "adobe")]
 		let targets = self.capabilities.upstreams_with_tools(&self.all_target_names());
 		#[cfg(not(feature = "adobe"))]
@@ -221,7 +218,7 @@ impl Relay {
 		if targets.is_empty() {
 			return Ok(());
 		}
-		let merge = self.merge_tools(cel);
+		let merge = self.merge_tools();
 		let list_req: rmcp::model::ListToolsRequest = ListToolsRequest::default();
 		let req = JsonRpcRequest::new(RequestId::Number(-1), ClientRequest::ListToolsRequest(list_req));
 		// Best-effort: if the internal tools/list fails entirely the route index
@@ -1172,10 +1169,34 @@ impl Relay {
 		&self,
 		targets: &[String],
 		r: JsonRpcRequest<ClientRequest>,
-		ctx: IncomingRequestContext,
+		mut ctx: IncomingRequestContext,
 		merge: Box<MergeFn>,
 	) -> Result<Response, UpstreamError> {
 		let id = r.id.clone();
+		let method = r.request.method().to_string();
+		let method = method.as_str();
+		// Request-phase mcpGuardrails hook (decision 2): runs once for the federated call so
+		// any metadata it injects into `ctx` is visible to the merge/list authz below. Backends
+		// are the fanned-to targets; a reject fails the whole call. Mirrors send_fanout.
+		if let Some(ext) = self.mcp_guardrails.as_ref() {
+			let outcome = crate::mcp::guardrails::run_call_request::<serde_json::Value>(
+				ext,
+				&mut crate::mcp::guardrails::CallRequestCtx {
+					backends: targets,
+					method,
+					params: None,
+				},
+				&mut ctx,
+				&self.policy_client,
+			)
+			.await;
+			if let crate::mcp::guardrails::Outcome::Reject(rej) = outcome {
+				return Err(UpstreamError::McpGuardrails(rej));
+			}
+		}
+		// Per-request CEL context, derived AFTER the request hook so injected metadata is
+		// captured; the MergeFn closure receives it at invocation (upstream #1842 model).
+		let cel = CelExecWrapper::new(ctx.as_request().map(|_| ()));
 		let target_set: std::collections::HashSet<&str> = targets.iter().map(String::as_str).collect();
 		let mut streams = Vec::new();
 
@@ -1207,12 +1228,18 @@ impl Relay {
 
 		if streams.is_empty() {
 			let ms =
-				mergestream::MergeStream::new(vec![], id.clone(), merge, self.upstreams.failure_mode);
+				mergestream::MergeStream::new(vec![], id.clone(), merge, cel, self.upstreams.failure_mode);
 			return messages_to_response(id, ms, None);
 		}
 
-		let ms = mergestream::MergeStream::new(streams, id.clone(), merge, self.upstreams.failure_mode);
-		messages_to_response(id, ms, None)
+		let ms =
+			mergestream::MergeStream::new(streams, id.clone(), merge, cel, self.upstreams.failure_mode);
+		// Response-phase mcpGuardrails hook on the merged federated result (decision 2:
+		// guardrails apply to federated/multiplexed list & read results, mirroring send_fanout).
+		match self.build_guardrails_ctx(&r, &ctx, targets.to_vec()) {
+			Some(guardrails) => messages_to_response(id, wrap_with_guardrails(ms, guardrails), None),
+			None => messages_to_response(id, ms, None),
+		}
 	}
 }
 
@@ -1224,7 +1251,7 @@ impl Relay {
 		let default_target_name = self.upstreams.default_target_name.clone();
 		let flat = self.mcp_rewrite.flat();
 		let flat_task_routes = self.flat_task_routes.clone();
-		Box::new(move |streams| {
+		Box::new(move |streams, _cel| {
 			let mut route_entries = Vec::new();
 			let mut tasks = streams
 				.into_iter()
@@ -1380,6 +1407,10 @@ fn wrap_with_guardrails(
 	})
 }
 
+// Upstream's plain SSE wrapper (#1842). Adobe routes all responses through
+// `messages_to_response_mapped`, which builds the SSE stream inline, so this helper is
+// currently unreferenced but kept to minimize divergence from upstream.
+#[allow(dead_code)]
 fn into_sse_stream(
 	request_id: RequestId,
 	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,

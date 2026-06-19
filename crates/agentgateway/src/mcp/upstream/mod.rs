@@ -8,7 +8,9 @@ use std::io;
 
 pub(crate) use client::McpHttpClient;
 pub use openapi::ParseError as OpenAPIParseError;
-use rmcp::model::{ClientJsonRpcMessage, ClientNotification, ClientRequest, JsonRpcRequest};
+use rmcp::model::{ClientNotification, ClientRequest, JsonRpcRequest};
+#[cfg(feature = "adobe")]
+use rmcp::model::ClientJsonRpcMessage;
 use rmcp::transport::TokioChildProcess;
 use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use thiserror::Error;
