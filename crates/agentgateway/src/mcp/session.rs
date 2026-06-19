@@ -12,7 +12,7 @@ use futures_util::StreamExt;
 use headers::HeaderMapExt;
 use rmcp::model::{
 	ClientInfo, ClientJsonRpcMessage, ClientNotification, ClientRequest, ConstString, Implementation,
-	InitializeRequest, JsonRpcRequest, ProtocolVersion, Reference, RequestId, RootsCapabilities,
+	InitializeRequest, JsonRpcRequest, ProtocolVersion, Reference, RequestId,
 	ServerJsonRpcMessage,
 };
 #[cfg(feature = "adobe")]
@@ -301,7 +301,7 @@ impl Session {
 	async fn handle_read_resource_request(
 		&self,
 		mut r: JsonRpcRequest<ClientRequest>,
-		ctx: IncomingRequestContext,
+		mut ctx: IncomingRequestContext,
 		method: &str,
 		span: &mut SpanWriteOnDrop,
 		log: &AsyncLog<mcp::MCPInfo>,
@@ -316,6 +316,19 @@ impl Session {
 		let (target_name, original_uri) =
 			self.authorize_federated_resource_uri(&uri, method, span, log, cel)?;
 		rrr.params.uri = original_uri;
+		// Decision 2: ExtMCP request guardrails must also run on the federated resource-read
+		// path (not just upstream's single-target path). The federated URI is already parsed
+		// and authorized above; run the request-phase guardrails hook against the resolved
+		// upstream target before forwarding.
+		self
+			.relay
+			.maybe_run_guardrails_call_request(
+				target_name.as_str(),
+				mcp::guardrails::methods::RESOURCES_READ,
+				&mut rrr.params,
+				&mut ctx,
+			)
+			.await?;
 		#[cfg(feature = "adobe")]
 		{
 			let default_mux = self.relay.default_target_name();
@@ -354,7 +367,7 @@ impl Session {
 		&self,
 		r: JsonRpcRequest<ClientRequest>,
 		ctx: IncomingRequestContext,
-		cel: rbac::CelExecWrapper,
+		_cel: rbac::CelExecWrapper,
 	) -> Result<Response, UpstreamError> {
 		#[cfg(feature = "adobe")]
 		let targets = self.relay.capabilities.upstreams_with_tools(&self.relay.all_target_names());
@@ -362,7 +375,7 @@ impl Session {
 		let targets = self.relay.all_target_names();
 		self
 			.relay
-			.send_fanout_to(&targets, r, ctx, self.relay.merge_tools(cel))
+			.send_fanout_to(&targets, r, ctx, self.relay.merge_tools())
 			.await
 	}
 
@@ -370,7 +383,7 @@ impl Session {
 		&self,
 		r: JsonRpcRequest<ClientRequest>,
 		ctx: IncomingRequestContext,
-		cel: rbac::CelExecWrapper,
+		_cel: rbac::CelExecWrapper,
 	) -> Result<Response, UpstreamError> {
 		#[cfg(feature = "adobe")]
 		let targets = self.relay.capabilities.upstreams_with_prompts(&self.relay.all_target_names());
@@ -378,7 +391,7 @@ impl Session {
 		let targets = self.relay.all_target_names();
 		self
 			.relay
-			.send_fanout_to(&targets, r, ctx, self.relay.merge_prompts(cel))
+			.send_fanout_to(&targets, r, ctx, self.relay.merge_prompts())
 			.await
 	}
 
@@ -386,7 +399,7 @@ impl Session {
 		&self,
 		r: JsonRpcRequest<ClientRequest>,
 		ctx: IncomingRequestContext,
-		cel: rbac::CelExecWrapper,
+		_cel: rbac::CelExecWrapper,
 	) -> Result<Response, UpstreamError> {
 		#[cfg(feature = "adobe")]
 		let targets = self.relay.capabilities.upstreams_with_resources(&self.relay.all_target_names());
@@ -394,7 +407,7 @@ impl Session {
 		let targets = self.relay.all_target_names();
 		self
 			.relay
-			.send_fanout_to(&targets, r, ctx, self.relay.merge_resources(cel))
+			.send_fanout_to(&targets, r, ctx, self.relay.merge_resources())
 			.await
 	}
 
@@ -402,7 +415,7 @@ impl Session {
 		&self,
 		r: JsonRpcRequest<ClientRequest>,
 		ctx: IncomingRequestContext,
-		cel: rbac::CelExecWrapper,
+		_cel: rbac::CelExecWrapper,
 	) -> Result<Response, UpstreamError> {
 		#[cfg(feature = "adobe")]
 		let targets = self.relay.capabilities.upstreams_with_resources(&self.relay.all_target_names());
@@ -410,7 +423,7 @@ impl Session {
 		let targets = self.relay.all_target_names();
 		self
 			.relay
-			.send_fanout_to(&targets, r, ctx, self.relay.merge_resource_templates(cel))
+			.send_fanout_to(&targets, r, ctx, self.relay.merge_resource_templates())
 			.await
 	}
 
