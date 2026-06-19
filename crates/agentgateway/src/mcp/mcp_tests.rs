@@ -4436,6 +4436,7 @@ fn merge_tools_applies_rename_before_multiplex_prefix() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -4446,7 +4447,7 @@ fn merge_tools_applies_rename_before_multiplex_prefix() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tools(cel);
+	let merge = relay.merge_tools();
 	let tool = Tool::new(
 		Cow::Owned("echo".to_string()),
 		Cow::Borrowed(""),
@@ -4460,7 +4461,7 @@ fn merge_tools_applies_rename_before_multiplex_prefix() {
 			meta: None,
 		}),
 	)];
-	let out = merge(streams).unwrap();
+	let out = merge(streams, &cel).unwrap();
 	let ServerResult::ListToolsResult(ltr) = out else {
 		panic!("expected ListToolsResult");
 	};
@@ -4497,6 +4498,7 @@ fn merge_tools_auth_on_upstream_rename_invisible_to_cel() {
 		policies,
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -4507,7 +4509,7 @@ fn merge_tools_auth_on_upstream_rename_invisible_to_cel() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tools(cel);
+	let merge = relay.merge_tools();
 	let streams = vec![(
 		"svc".into(),
 		ServerResult::ListToolsResult(ListToolsResult {
@@ -4527,7 +4529,7 @@ fn merge_tools_auth_on_upstream_rename_invisible_to_cel() {
 			meta: None,
 		}),
 	)];
-	let out = merge(streams).unwrap();
+	let out = merge(streams, &cel).unwrap();
 	let ServerResult::ListToolsResult(ltr) = out else {
 		panic!("expected ListToolsResult");
 	};
@@ -4564,6 +4566,7 @@ async fn flat_resolve_tool_call_uses_tools_list_route_index() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -4574,7 +4577,7 @@ async fn flat_resolve_tool_call_uses_tools_list_route_index() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tools(cel);
+	let merge = relay.merge_tools();
 	let mk = |n: &str| {
 		Tool::new(
 			Cow::Owned(n.to_string()),
@@ -4599,7 +4602,7 @@ async fn flat_resolve_tool_call_uses_tools_list_route_index() {
 				meta: None,
 			}),
 		),
-	])
+	], &cel)
 	.unwrap();
 
 	let ctx = crate::mcp::upstream::IncomingRequestContext::empty();
@@ -4666,6 +4669,7 @@ async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -4676,7 +4680,7 @@ async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tools(cel);
+	let merge = relay.merge_tools();
 	let mk = |n: &str| {
 		Tool::new(
 			Cow::Owned(n.to_string()),
@@ -4720,7 +4724,7 @@ async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation() {
 				meta: None,
 			}),
 		),
-	])
+	], &cel)
 	.unwrap();
 
 	let ctx = crate::mcp::upstream::IncomingRequestContext::empty();
@@ -4783,6 +4787,7 @@ async fn flat_route_index_first_wins_keeps_colliding_name_callable() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -4793,7 +4798,7 @@ async fn flat_route_index_first_wins_keeps_colliding_name_callable() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tools(cel);
+	let merge = relay.merge_tools();
 	let mk = |n: &str| {
 		Tool::new(
 			Cow::Owned(n.to_string()),
@@ -4818,7 +4823,7 @@ async fn flat_route_index_first_wins_keeps_colliding_name_callable() {
 				meta: None,
 			}),
 		),
-	])
+	], &cel)
 	.unwrap();
 	let ServerResult::ListToolsResult(ltr) = out else {
 		panic!("expected ListToolsResult");
@@ -4852,6 +4857,7 @@ async fn resolve_tool_call_maps_exposed_to_upstream() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -4883,6 +4889,7 @@ fn flat_merge_tools_omits_pass_through_name_collision() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -4893,7 +4900,7 @@ fn flat_merge_tools_omits_pass_through_name_collision() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tools(cel);
+	let merge = relay.merge_tools();
 	let mk = |n: &str| {
 		Tool::new(
 			Cow::Owned(n.to_string()),
@@ -4919,7 +4926,7 @@ fn flat_merge_tools_omits_pass_through_name_collision() {
 			}),
 		),
 	];
-	let out = merge(streams).unwrap();
+	let out = merge(streams, &cel).unwrap();
 	let ServerResult::ListToolsResult(ltr) = out else {
 		panic!("expected ListToolsResult");
 	};
@@ -4943,6 +4950,7 @@ fn flat_merge_resources_keeps_flat_name_and_multiplex_uri() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -4953,7 +4961,7 @@ fn flat_merge_resources_keeps_flat_name_and_multiplex_uri() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_resources(cel);
+	let merge = relay.merge_resources();
 	let resource = RawResource::new("memo://insights/report", "memo".to_string()).no_annotation();
 	let streams = vec![(
 		"alpha".into(),
@@ -4963,7 +4971,7 @@ fn flat_merge_resources_keeps_flat_name_and_multiplex_uri() {
 			meta: None,
 		}),
 	)];
-	let out = merge(streams).unwrap();
+	let out = merge(streams, &cel).unwrap();
 	let ServerResult::ListResourcesResult(lrr) = out else {
 		panic!("expected ListResourcesResult");
 	};
@@ -4997,6 +5005,7 @@ fn flat_merge_resources_omits_pass_through_name_collision() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5007,7 +5016,7 @@ fn flat_merge_resources_omits_pass_through_name_collision() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_resources(cel);
+	let merge = relay.merge_resources();
 	let mk = |uri: &str| RawResource::new(uri, "memo".to_string()).no_annotation();
 	let streams = vec![
 		(
@@ -5027,7 +5036,7 @@ fn flat_merge_resources_omits_pass_through_name_collision() {
 			}),
 		),
 	];
-	let out = merge(streams).unwrap();
+	let out = merge(streams, &cel).unwrap();
 	let ServerResult::ListResourcesResult(lrr) = out else {
 		panic!("expected ListResourcesResult");
 	};
@@ -5051,6 +5060,7 @@ fn flat_merge_resource_templates_keeps_flat_name_and_multiplex_uri_template() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5061,7 +5071,7 @@ fn flat_merge_resource_templates_keeps_flat_name_and_multiplex_uri_template() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_resource_templates(cel);
+	let merge = relay.merge_resource_templates();
 	let template =
 		RawResourceTemplate::new("file://{path}", "template").no_annotation();
 	let streams = vec![(
@@ -5072,7 +5082,7 @@ fn flat_merge_resource_templates_keeps_flat_name_and_multiplex_uri_template() {
 			meta: None,
 		}),
 	)];
-	let out = merge(streams).unwrap();
+	let out = merge(streams, &cel).unwrap();
 	let ServerResult::ListResourceTemplatesResult(lrt) = out else {
 		panic!("expected ListResourceTemplatesResult");
 	};
@@ -5103,6 +5113,7 @@ fn flat_merge_tasks_omits_pass_through_id_collision() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5113,7 +5124,7 @@ fn flat_merge_tasks_omits_pass_through_id_collision() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tasks(cel);
+	let merge = relay.merge_tasks();
 	let mk = |id: &str| {
 		let ts = "2020-01-01T00:00:00Z";
 		Task::new(id.to_string(), TaskStatus::Working, ts.into(), ts.into())
@@ -5128,7 +5139,7 @@ fn flat_merge_tasks_omits_pass_through_id_collision() {
 			ServerResult::ListTasksResult(ListTasksResult::new(vec![mk("job-1")])),
 		),
 	];
-	let out = merge(streams).unwrap();
+	let out = merge(streams, &cel).unwrap();
 	let ServerResult::ListTasksResult(ltr) = out else {
 		panic!("expected ListTasksResult");
 	};
@@ -5152,6 +5163,7 @@ fn flat_merge_tasks_populates_route_index_for_tasks_get() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5162,7 +5174,7 @@ fn flat_merge_tasks_populates_route_index_for_tasks_get() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tasks(cel);
+	let merge = relay.merge_tasks();
 	let mk = |id: &str| {
 		let ts = "2020-01-01T00:00:00Z";
 		Task::new(id.to_string(), TaskStatus::Working, ts.into(), ts.into())
@@ -5170,7 +5182,7 @@ fn flat_merge_tasks_populates_route_index_for_tasks_get() {
 	let _ = merge(vec![(
 		"a".into(),
 		ServerResult::ListTasksResult(ListTasksResult::new(vec![mk("job-99")])),
-	)]);
+	)], &cel);
 
 	let (target, upstream) = relay.resolve_task_call("job-99").unwrap();
 	assert_eq!(target, "a");
@@ -5198,6 +5210,7 @@ fn flat_merge_tasks_preserves_create_recorded_route() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5214,13 +5227,13 @@ fn flat_merge_tasks_preserves_create_recorded_route() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tasks(cel);
+	let merge = relay.merge_tasks();
 	let ts = "2020-01-01T00:00:00Z";
 	let mk = |id: &str| Task::new(id.to_string(), TaskStatus::Working, ts.into(), ts.into());
 	let _ = merge(vec![(
 		"b".into(),
 		ServerResult::ListTasksResult(ListTasksResult::new(vec![mk("job-from-b")])),
-	)]);
+	)], &cel);
 
 	// `created-1` must still resolve to target `a` — the new entry from `b`
 	// is also routable, but the prior create-recorded entry is preserved.
@@ -5255,6 +5268,7 @@ async fn ensure_flat_task_routes_loaded_noop_when_index_populated() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5265,7 +5279,7 @@ async fn ensure_flat_task_routes_loaded_noop_when_index_populated() {
 			.body(())
 			.unwrap(),
 	);
-	let merge = relay.merge_tasks(cel);
+	let merge = relay.merge_tasks();
 	let ts = "2020-01-01T00:00:00Z";
 	let _ = merge(vec![(
 		"a".into(),
@@ -5275,7 +5289,7 @@ async fn ensure_flat_task_routes_loaded_noop_when_index_populated() {
 			ts.into(),
 			ts.into(),
 		)])),
-	)]);
+	)], &cel);
 
 	let ctx = IncomingRequestContext::empty();
 	relay
@@ -5299,6 +5313,7 @@ fn resolve_task_call_flat_maps_to_target() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5317,6 +5332,7 @@ fn resolve_task_call_flat_maps_to_target() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5350,6 +5366,7 @@ fn resolve_task_call_flat_maps_to_target() {
 		empty_mcp_policies(),
 		PolicyClient {
 			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
 		},
 	)
 	.unwrap();
@@ -5406,6 +5423,7 @@ mod adobe_mcp_apps_integration {
 			empty_mcp_policies(),
 			PolicyClient {
 				inputs: setup_proxy_test("{}").unwrap().pi,
+				outbound: None,
 			},
 		)
 		.unwrap();
@@ -5416,7 +5434,7 @@ mod adobe_mcp_apps_integration {
 				.body(())
 				.unwrap(),
 		);
-		let merge = relay.merge_tools(cel);
+		let merge = relay.merge_tools();
 
 		let mut meta = Meta::new();
 		meta.insert("ui".into(), json!({ "resourceUri": "ui://x/app.html" }));
@@ -5438,7 +5456,7 @@ mod adobe_mcp_apps_integration {
 			}),
 		)];
 
-		let out = merge(streams).unwrap();
+		let out = merge(streams, &cel).unwrap();
 		let ServerResult::ListToolsResult(ltr) = out else {
 			panic!("expected ListToolsResult");
 		};
@@ -5469,6 +5487,7 @@ mod adobe_mcp_apps_integration {
 			empty_mcp_policies(),
 			PolicyClient {
 				inputs: setup_proxy_test("{}").unwrap().pi,
+				outbound: None,
 			},
 		)
 		.unwrap();
@@ -5497,7 +5516,7 @@ mod adobe_mcp_apps_integration {
 				),
 			),
 		];
-		let _ = merge_fn(results).unwrap();
+		let _ = merge_fn(results, &empty_cel()).unwrap();
 
 		let all = relay.all_target_names();
 		let task_targets = relay.capabilities.upstreams_with_tasks(&all);
@@ -5518,6 +5537,7 @@ mod adobe_mcp_apps_integration {
 			empty_mcp_policies(),
 			PolicyClient {
 				inputs: setup_proxy_test("{}").unwrap().pi,
+				outbound: None,
 			},
 		)
 		.unwrap();
@@ -5528,8 +5548,8 @@ mod adobe_mcp_apps_integration {
 				.body(())
 				.unwrap(),
 		);
-		let merge = relay.merge_tasks(cel);
-		let out = merge(vec![]).unwrap();
+		let merge = relay.merge_tasks();
+		let out = merge(vec![], &cel).unwrap();
 		let ServerResult::ListTasksResult(ltr) = out else {
 			panic!("expected ListTasksResult");
 		};
@@ -5549,16 +5569,11 @@ mod adobe_mcp_apps_integration {
 			empty_mcp_policies(),
 			PolicyClient {
 				inputs: setup_proxy_test("{}").unwrap().pi,
+				outbound: None,
 			},
 		)
 		.unwrap();
-		let cel = crate::mcp::rbac::CelExecWrapper::new(
-			::http::Request::builder()
-				.uri("http://example.com/mcp")
-				.body(())
-				.unwrap(),
-		);
-		let merge = relay.merge_tasks(cel);
+		let merge = relay.merge_tasks();
 		let targets: Vec<String> = vec![];
 		let req = JsonRpcRequest::new(
 			RequestId::Number(99),

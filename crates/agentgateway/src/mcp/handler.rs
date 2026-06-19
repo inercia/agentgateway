@@ -256,18 +256,13 @@ impl Relay {
 		if !self.flat_task_routes.read().is_empty() {
 			return Ok(());
 		}
-		let mut req: ::http::Request<()> = ::http::Request::new(());
-		*req.headers_mut() = ctx.headers().clone();
-		*req.extensions_mut() = ctx.extensions().clone();
-		let cel = crate::mcp::rbac::CelExecWrapper::new(req);
-
 		let targets = self
 			.capabilities
 			.upstreams_with_tasks(&self.all_target_names());
 		if targets.is_empty() {
 			return Ok(());
 		}
-		let merge = self.merge_tasks(cel);
+		let merge = self.merge_tasks();
 		let list_req = rmcp::model::ListTasksRequest::default();
 		let req = JsonRpcRequest::new(RequestId::Number(-1), ClientRequest::ListTasksRequest(list_req));
 		let resp = match self
@@ -1245,13 +1240,13 @@ impl Relay {
 
 #[cfg(feature = "adobe")]
 impl Relay {
-	pub fn merge_tasks(&self, cel: CelExecWrapper) -> Box<MergeFn> {
+	pub fn merge_tasks(&self) -> Box<MergeFn> {
 		use rmcp::model::ListTasksResult;
 		let policies = self.policies.clone();
 		let default_target_name = self.upstreams.default_target_name.clone();
 		let flat = self.mcp_rewrite.flat();
 		let flat_task_routes = self.flat_task_routes.clone();
-		Box::new(move |streams, _cel| {
+		Box::new(move |streams, cel| {
 			let mut route_entries = Vec::new();
 			let mut tasks = streams
 				.into_iter()
@@ -1268,7 +1263,7 @@ impl Relay {
 									server_name.to_string(),
 									t.task_id.to_string(),
 								)),
-								&cel,
+								cel,
 							)
 						})
 						.map(|mut t| {

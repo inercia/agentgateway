@@ -123,9 +123,11 @@ impl IncomingRequestContext {
 			authority: self.authority.clone(),
 		}
 	}
+	#[allow(dead_code)] // accessor kept for symmetry with headers_mut(); see ExtMCP cel rethread
 	pub fn headers(&self) -> &http::HeaderMap {
 		&self.headers
 	}
+	#[allow(dead_code)] // accessor kept for symmetry with extensions_mut(); see ExtMCP cel rethread
 	pub fn extensions(&self) -> &::http::Extensions {
 		&self.ext
 	}
