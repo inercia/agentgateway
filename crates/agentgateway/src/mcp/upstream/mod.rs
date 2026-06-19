@@ -252,7 +252,8 @@ impl Upstream {
 					};
 					c.set_session_id(sid.map(|s| s.as_str()), None);
 				}
-				res.try_into().map_err(UpstreamError::Http)
+				let m = res.try_into().map_err(UpstreamError::Http);
+				m
 			},
 			Upstream::OpenAPI(c) => Ok(c.send_message(request, ctx).await?),
 		}
