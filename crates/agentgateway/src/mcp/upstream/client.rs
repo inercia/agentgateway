@@ -46,19 +46,6 @@ impl McpHttpClient {
 		&self,
 		req: http::Request<crate::http::Body>,
 	) -> Result<http::Response<crate::http::Body>, ProxyError> {
-		thread_local! { static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
-		struct DepthGuard;
-		impl Drop for DepthGuard { fn drop(&mut self) { DEPTH.with(|d| d.set(d.get().saturating_sub(1))); } }
-		let _dg = {
-			DEPTH.with(|d| {
-				let n = d.get() + 1;
-				d.set(n);
-				if n > 8 {
-					panic!("@@RECURSION McpHttpClient::call depth={n}");
-				}
-			});
-			DepthGuard
-		};
 		let mut policies = self.base_policies.clone();
 
 		if self.stateful
