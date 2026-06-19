@@ -26,8 +26,8 @@ use crate::types::agent::{BackendTrafficPolicy, FrontendPolicy, PolicyTarget, Ta
 use crate::*;
 
 #[test]
-fn stream_to_stream_single() { crate::mcp::tests::block_on_big_stack(stream_to_stream_single__inner()) }
-async fn stream_to_stream_single__inner() {
+fn stream_to_stream_single() { crate::mcp::tests::block_on_big_stack(stream_to_stream_single_inner_body()) }
+async fn stream_to_stream_single_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy(&mock, true, false).await;
 	let client = mcp_streamable_client(io).await;
@@ -43,8 +43,8 @@ async fn sse_to_stream_single() {
 }
 
 #[test]
-fn stream_to_sse_single() { crate::mcp::tests::block_on_big_stack(stream_to_sse_single__inner()) }
-async fn stream_to_sse_single__inner() {
+fn stream_to_sse_single() { crate::mcp::tests::block_on_big_stack(stream_to_sse_single_inner_body()) }
+async fn stream_to_sse_single_inner_body() {
 	let mock = mock_sse_server().await;
 	let (_bind, io) = setup_proxy(&mock, true, true).await;
 	let client = mcp_streamable_client(io).await;
@@ -60,8 +60,8 @@ async fn sse_to_sse_single() {
 }
 
 #[test]
-fn stream_to_multiplex() { crate::mcp::tests::block_on_big_stack(stream_to_multiplex__inner()) }
-async fn stream_to_multiplex__inner() {
+fn stream_to_multiplex() { crate::mcp::tests::block_on_big_stack(stream_to_multiplex_inner_body()) }
+async fn stream_to_multiplex_inner_body() {
 	let mock_stream = mock_streamable_http_server(true).await;
 	let mock_sse = mock_sse_server().await;
 	let t = setup_proxy_test("{}")
@@ -147,8 +147,8 @@ async fn stream_to_multiplex__inner() {
 }
 
 #[test]
-fn stream_to_multiplex_resources() { crate::mcp::tests::block_on_big_stack(stream_to_multiplex_resources__inner()) }
-async fn stream_to_multiplex_resources__inner() {
+fn stream_to_multiplex_resources() { crate::mcp::tests::block_on_big_stack(stream_to_multiplex_resources_inner_body()) }
+async fn stream_to_multiplex_resources_inner_body() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let t = setup_proxy_test("{}")
@@ -239,8 +239,8 @@ async fn stream_to_multiplex_resources__inner() {
 }
 
 #[test]
-fn multiplex_advertises_tool_and_resource_subscribe_capabilities() { crate::mcp::tests::block_on_big_stack(multiplex_advertises_tool_and_resource_subscribe_capabilities__inner()) }
-async fn multiplex_advertises_tool_and_resource_subscribe_capabilities__inner() {
+fn multiplex_advertises_tool_and_resource_subscribe_capabilities() { crate::mcp::tests::block_on_big_stack(multiplex_advertises_tool_and_resource_subscribe_capabilities_inner_body()) }
+async fn multiplex_advertises_tool_and_resource_subscribe_capabilities_inner_body() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let t = setup_proxy_test("{}")
@@ -262,8 +262,8 @@ async fn multiplex_advertises_tool_and_resource_subscribe_capabilities__inner() 
 }
 
 #[test]
-fn stateless_multiplex_does_not_advertise_resource_subscribe() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_does_not_advertise_resource_subscribe__inner()) }
-async fn stateless_multiplex_does_not_advertise_resource_subscribe__inner() {
+fn stateless_multiplex_does_not_advertise_resource_subscribe() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_does_not_advertise_resource_subscribe_inner_body()) }
+async fn stateless_multiplex_does_not_advertise_resource_subscribe_inner_body() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let t = setup_proxy_test("{}")
@@ -282,8 +282,8 @@ async fn stateless_multiplex_does_not_advertise_resource_subscribe__inner() {
 }
 
 #[test]
-fn stateless_multiplex_tool_call_initializes_only_target() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_tool_call_initializes_only_target__inner()) }
-async fn stateless_multiplex_tool_call_initializes_only_target__inner() {
+fn stateless_multiplex_tool_call_initializes_only_target() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_tool_call_initializes_only_target_inner_body()) }
+async fn stateless_multiplex_tool_call_initializes_only_target_inner_body() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let t = setup_proxy_test("{}")
@@ -370,8 +370,8 @@ fn stateless_multiplex_get_prompt_initializes_only_target() {
 }
 
 #[test]
-fn stateless_multiplex_delete_session_skips_uninitialized_targets() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_delete_session_skips_uninitialized_targets__inner()) }
-async fn stateless_multiplex_delete_session_skips_uninitialized_targets__inner() {
+fn stateless_multiplex_delete_session_skips_uninitialized_targets() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_delete_session_skips_uninitialized_targets_inner_body()) }
+async fn stateless_multiplex_delete_session_skips_uninitialized_targets_inner_body() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let relay = Relay::new(
@@ -555,8 +555,8 @@ fn mcp_json_post<'a>(
 }
 
 #[test]
-fn stateless_to_stateful() { crate::mcp::tests::block_on_big_stack(stateless_to_stateful__inner()) }
-async fn stateless_to_stateful__inner() {
+fn stateless_to_stateful() { crate::mcp::tests::block_on_big_stack(stateless_to_stateful_inner_body()) }
+async fn stateless_to_stateful_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy(&mock, false, false).await;
 	let client = mcp_streamable_client(io).await;
@@ -564,8 +564,8 @@ async fn stateless_to_stateful__inner() {
 }
 
 #[test]
-fn stateless_to_stateless() { crate::mcp::tests::block_on_big_stack(stateless_to_stateless__inner()) }
-async fn stateless_to_stateless__inner() {
+fn stateless_to_stateless() { crate::mcp::tests::block_on_big_stack(stateless_to_stateless_inner_body()) }
+async fn stateless_to_stateless_inner_body() {
 	let mock = mock_streamable_http_server(false).await;
 	let (_bind, io) = setup_proxy(&mock, false, false).await;
 	let client = mcp_streamable_client(io).await;
@@ -573,8 +573,8 @@ async fn stateless_to_stateless__inner() {
 }
 
 #[test]
-fn stream_to_stream_single_tls() { crate::mcp::tests::block_on_big_stack(stream_to_stream_single_tls__inner()) }
-async fn stream_to_stream_single_tls__inner() {
+fn stream_to_stream_single_tls() { crate::mcp::tests::block_on_big_stack(stream_to_stream_single_tls_inner_body()) }
+async fn stream_to_stream_single_tls_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy_policies(
 		&mock,
@@ -607,8 +607,8 @@ async fn stream_to_stream_single_tls__inner() {
 /// Test that calling a tool denied by MCP authorization policy returns proper JSON-RPC error
 /// with INVALID_PARAMS error code (-32602) and message "Unknown tool: {tool_name}"
 #[test]
-fn authorization_denied_returns_unknown_tool_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_tool_error__inner()) }
-async fn authorization_denied_returns_unknown_tool_error__inner() {
+fn authorization_denied_returns_unknown_tool_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_tool_error_inner_body()) }
+async fn authorization_denied_returns_unknown_tool_error_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 
 	// Create an MCP authorization policy that denies all tools
@@ -672,8 +672,8 @@ async fn authorization_denied_returns_unknown_tool_error__inner() {
 /// Test that getting a prompt denied by MCP authorization policy returns proper JSON-RPC error
 /// with INVALID_PARAMS error code (-32602) and message "Unknown prompt: {prompt_name}"
 #[test]
-fn authorization_denied_returns_unknown_prompt_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_prompt_error__inner()) }
-async fn authorization_denied_returns_unknown_prompt_error__inner() {
+fn authorization_denied_returns_unknown_prompt_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_prompt_error_inner_body()) }
+async fn authorization_denied_returns_unknown_prompt_error_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 
 	// Create an MCP authorization policy that denies all prompts
@@ -728,8 +728,8 @@ async fn authorization_denied_returns_unknown_prompt_error__inner() {
 /// Test that reading a resource denied by MCP authorization policy returns proper JSON-RPC error
 /// with INVALID_PARAMS error code (-32602) and message "Unknown resource: {resource_uri}"
 #[test]
-fn authorization_denied_returns_unknown_resource_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_resource_error__inner()) }
-async fn authorization_denied_returns_unknown_resource_error__inner() {
+fn authorization_denied_returns_unknown_resource_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_resource_error_inner_body()) }
+async fn authorization_denied_returns_unknown_resource_error_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 
 	// Create an MCP authorization policy that denies all resources
@@ -784,8 +784,8 @@ async fn authorization_denied_returns_unknown_resource_error__inner() {
 }
 
 #[test]
-fn resource_subscribe_and_unsubscribe_forward_to_single_backend() { crate::mcp::tests::block_on_big_stack(resource_subscribe_and_unsubscribe_forward_to_single_backend__inner()) }
-async fn resource_subscribe_and_unsubscribe_forward_to_single_backend__inner() {
+fn resource_subscribe_and_unsubscribe_forward_to_single_backend() { crate::mcp::tests::block_on_big_stack(resource_subscribe_and_unsubscribe_forward_to_single_backend_inner_body()) }
+async fn resource_subscribe_and_unsubscribe_forward_to_single_backend_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy(&mock, true, false).await;
 	let client = mcp_streamable_client(io).await;
@@ -803,8 +803,8 @@ async fn resource_subscribe_and_unsubscribe_forward_to_single_backend__inner() {
 }
 
 #[test]
-fn multiplex_resource_subscribe_and_unsubscribe_route_to_target() { crate::mcp::tests::block_on_big_stack(multiplex_resource_subscribe_and_unsubscribe_route_to_target__inner()) }
-async fn multiplex_resource_subscribe_and_unsubscribe_route_to_target__inner() {
+fn multiplex_resource_subscribe_and_unsubscribe_route_to_target() { crate::mcp::tests::block_on_big_stack(multiplex_resource_subscribe_and_unsubscribe_route_to_target_inner_body()) }
+async fn multiplex_resource_subscribe_and_unsubscribe_route_to_target_inner_body() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let t = setup_proxy_test("{}")
@@ -842,8 +842,8 @@ async fn multiplex_resource_subscribe_and_unsubscribe_route_to_target__inner() {
 }
 
 #[test]
-fn multiplex_resource_updated_notification_is_prefixed() { crate::mcp::tests::block_on_big_stack(multiplex_resource_updated_notification_is_prefixed__inner()) }
-async fn multiplex_resource_updated_notification_is_prefixed__inner() {
+fn multiplex_resource_updated_notification_is_prefixed() { crate::mcp::tests::block_on_big_stack(multiplex_resource_updated_notification_is_prefixed_inner_body()) }
+async fn multiplex_resource_updated_notification_is_prefixed_inner_body() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let t = setup_proxy_test("{}")
@@ -875,8 +875,8 @@ async fn multiplex_resource_updated_notification_is_prefixed__inner() {
 }
 
 #[test]
-fn single_resource_updated_notification_is_not_prefixed() { crate::mcp::tests::block_on_big_stack(single_resource_updated_notification_is_not_prefixed__inner()) }
-async fn single_resource_updated_notification_is_not_prefixed__inner() {
+fn single_resource_updated_notification_is_not_prefixed() { crate::mcp::tests::block_on_big_stack(single_resource_updated_notification_is_not_prefixed_inner_body()) }
+async fn single_resource_updated_notification_is_not_prefixed_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy(&mock, true, false).await;
 	let (client, updated_uri, notify) = mcp_streamable_client_capture_resource_updates(io).await;
@@ -895,8 +895,8 @@ async fn single_resource_updated_notification_is_not_prefixed__inner() {
 /// Test that a deny policy targeting a specific tool filters only that tool from list_tools,
 /// while leaving all other tools accessible.
 #[test]
-fn authorization_deny_specific_tool_filters_only_that_tool() { crate::mcp::tests::block_on_big_stack(authorization_deny_specific_tool_filters_only_that_tool__inner()) }
-async fn authorization_deny_specific_tool_filters_only_that_tool__inner() {
+fn authorization_deny_specific_tool_filters_only_that_tool() { crate::mcp::tests::block_on_big_stack(authorization_deny_specific_tool_filters_only_that_tool_inner_body()) }
+async fn authorization_deny_specific_tool_filters_only_that_tool_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 
 	// Create a deny policy that only denies the "echo" tool
@@ -1055,8 +1055,8 @@ async fn authorization_deny_with_request_header_filters_per_agent() {
 }
 
 #[test]
-fn mcp_authentication_early_response_transformation_has_request_context() { crate::mcp::tests::block_on_big_stack(mcp_authentication_early_response_transformation_has_request_context__inner()) }
-async fn mcp_authentication_early_response_transformation_has_request_context__inner() {
+fn mcp_authentication_early_response_transformation_has_request_context() { crate::mcp::tests::block_on_big_stack(mcp_authentication_early_response_transformation_has_request_context_inner_body()) }
+async fn mcp_authentication_early_response_transformation_has_request_context_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let authn = crate::types::agent::McpAuthentication {
 		issuer: "https://issuer.example.com".to_string(),
@@ -1231,8 +1231,8 @@ async fn setup_access_log_mcp_proxy(mock: &MockServer) -> (TestBind, SocketAddr)
 }
 
 #[test]
-fn tool_call_exposes_payload_fields_to_access_log_cel() { crate::mcp::tests::block_on_big_stack(tool_call_exposes_payload_fields_to_access_log_cel__inner()) }
-async fn tool_call_exposes_payload_fields_to_access_log_cel__inner() {
+fn tool_call_exposes_payload_fields_to_access_log_cel() { crate::mcp::tests::block_on_big_stack(tool_call_exposes_payload_fields_to_access_log_cel_inner_body()) }
+async fn tool_call_exposes_payload_fields_to_access_log_cel_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let trace_id = format!("mcp-e2e-{}", uuid::Uuid::new_v4());
 	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
@@ -1317,8 +1317,8 @@ fn assert_duration_log_field(log: &serde_json::Value, field: &str) {
 }
 
 #[test]
-fn tool_call_error_exposes_error_payload_to_access_log_cel() { crate::mcp::tests::block_on_big_stack(tool_call_error_exposes_error_payload_to_access_log_cel__inner()) }
-async fn tool_call_error_exposes_error_payload_to_access_log_cel__inner() {
+fn tool_call_error_exposes_error_payload_to_access_log_cel() { crate::mcp::tests::block_on_big_stack(tool_call_error_exposes_error_payload_to_access_log_cel_inner_body()) }
+async fn tool_call_error_exposes_error_payload_to_access_log_cel_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let trace_id = format!("mcp-e2e-error-{}", uuid::Uuid::new_v4());
 	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
@@ -1427,8 +1427,8 @@ async fn legacy_sse_tool_call_exposes_arguments_without_terminal_payloads() {
 }
 
 #[test]
-fn prompt_request_emits_gen_ai_prompt_name() { crate::mcp::tests::block_on_big_stack(prompt_request_emits_gen_ai_prompt_name__inner()) }
-async fn prompt_request_emits_gen_ai_prompt_name__inner() {
+fn prompt_request_emits_gen_ai_prompt_name() { crate::mcp::tests::block_on_big_stack(prompt_request_emits_gen_ai_prompt_name_inner_body()) }
+async fn prompt_request_emits_gen_ai_prompt_name_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
 	let client = mcp_streamable_client(io).await;
@@ -2400,8 +2400,8 @@ mod legacymockserver {
 }
 
 #[test]
-fn test_zero_targets_fail_closed() { crate::mcp::tests::block_on_big_stack(test_zero_targets_fail_closed__inner()) }
-async fn test_zero_targets_fail_closed__inner() {
+fn test_zero_targets_fail_closed() { crate::mcp::tests::block_on_big_stack(test_zero_targets_fail_closed_inner_body()) }
+async fn test_zero_targets_fail_closed_inner_body() {
 	let backend = McpBackendGroup {
 		targets: vec![],
 		..Default::default()
@@ -2412,8 +2412,8 @@ async fn test_zero_targets_fail_closed__inner() {
 }
 
 #[test]
-fn test_zero_targets_fail_open() { crate::mcp::tests::block_on_big_stack(test_zero_targets_fail_open__inner()) }
-async fn test_zero_targets_fail_open__inner() {
+fn test_zero_targets_fail_open() { crate::mcp::tests::block_on_big_stack(test_zero_targets_fail_open_inner_body()) }
+async fn test_zero_targets_fail_open_inner_body() {
 	let backend = McpBackendGroup {
 		targets: vec![],
 		failure_mode: FailureMode::FailOpen,
@@ -2424,8 +2424,8 @@ async fn test_zero_targets_fail_open__inner() {
 }
 
 #[test]
-fn test_setup_partial_success_fail_open() { crate::mcp::tests::block_on_big_stack(test_setup_partial_success_fail_open__inner()) }
-async fn test_setup_partial_success_fail_open__inner() {
+fn test_setup_partial_success_fail_open() { crate::mcp::tests::block_on_big_stack(test_setup_partial_success_fail_open_inner_body()) }
+async fn test_setup_partial_success_fail_open_inner_body() {
 	// Test skipping failed stdio targets
 	let backend = McpBackendGroup {
 		targets: vec![
@@ -2464,8 +2464,8 @@ async fn test_setup_partial_success_fail_open__inner() {
 }
 
 #[test]
-fn test_all_targets_fail_open_still_errors() { crate::mcp::tests::block_on_big_stack(test_all_targets_fail_open_still_errors__inner()) }
-async fn test_all_targets_fail_open_still_errors__inner() {
+fn test_all_targets_fail_open_still_errors() { crate::mcp::tests::block_on_big_stack(test_all_targets_fail_open_still_errors_inner_body()) }
+async fn test_all_targets_fail_open_still_errors_inner_body() {
 	let backend = McpBackendGroup {
 		targets: vec![
 			Arc::new(McpTarget {
@@ -2703,8 +2703,8 @@ fn test_sse_targets_emit_stateless_session_state() {
 }
 
 #[test]
-fn test_stdio_targets_remain_non_stateless() { crate::mcp::tests::block_on_big_stack(test_stdio_targets_remain_non_stateless__inner()) }
-async fn test_stdio_targets_remain_non_stateless__inner() {
+fn test_stdio_targets_remain_non_stateless() { crate::mcp::tests::block_on_big_stack(test_stdio_targets_remain_non_stateless_inner_body()) }
+async fn test_stdio_targets_remain_non_stateless_inner_body() {
 	let relay = Relay::new(
 		McpBackendGroup {
 			targets: vec![fake_stdio_target("stdio")],
@@ -2720,8 +2720,8 @@ async fn test_stdio_targets_remain_non_stateless__inner() {
 }
 
 #[test]
-fn test_fanout_deletion_fail_open_skips_failed_upstreams() { crate::mcp::tests::block_on_big_stack(test_fanout_deletion_fail_open_skips_failed_upstreams__inner()) }
-async fn test_fanout_deletion_fail_open_skips_failed_upstreams__inner() {
+fn test_fanout_deletion_fail_open_skips_failed_upstreams() { crate::mcp::tests::block_on_big_stack(test_fanout_deletion_fail_open_skips_failed_upstreams_inner_body()) }
+async fn test_fanout_deletion_fail_open_skips_failed_upstreams_inner_body() {
 	let good = mock_streamable_http_server(true).await;
 	let bad_addr = SocketAddr::from(([127, 0, 0, 1], 31999));
 	let relay = Relay::new(
@@ -3095,8 +3095,8 @@ async fn test_runtime_fanout_fail_open_all_fail() {
 }
 
 #[test]
-fn mcp_local_ratelimit() { crate::mcp::tests::block_on_big_stack(mcp_local_ratelimit__inner()) }
-async fn mcp_local_ratelimit__inner() {
+fn mcp_local_ratelimit() { crate::mcp::tests::block_on_big_stack(mcp_local_ratelimit_inner_body()) }
+async fn mcp_local_ratelimit_inner_body() {
 	let mock = mock_streamable_http_server(true).await;
 	let mut t = setup_proxy_test("{}")
 		.unwrap()
@@ -3148,8 +3148,8 @@ async fn mcp_local_ratelimit__inner() {
 }
 
 #[test]
-fn mcp_extauth_deny() { crate::mcp::tests::block_on_big_stack(mcp_extauth_deny__inner()) }
-async fn mcp_extauth_deny__inner() {
+fn mcp_extauth_deny() { crate::mcp::tests::block_on_big_stack(mcp_extauth_deny_inner_body()) }
+async fn mcp_extauth_deny_inner_body() {
 	struct DenyAllAuthz;
 
 	#[async_trait::async_trait]
@@ -3215,8 +3215,8 @@ async fn try_mcp_streamable_client(
 }
 
 #[test]
-fn mcp_remote_ratelimit_deny() { crate::mcp::tests::block_on_big_stack(mcp_remote_ratelimit_deny__inner()) }
-async fn mcp_remote_ratelimit_deny__inner() {
+fn mcp_remote_ratelimit_deny() { crate::mcp::tests::block_on_big_stack(mcp_remote_ratelimit_deny_inner_body()) }
+async fn mcp_remote_ratelimit_deny_inner_body() {
 	struct DenyAllRateLimit;
 
 	#[async_trait::async_trait]
@@ -3330,8 +3330,8 @@ mod guardrails_test_support {
 // ============================== mcpGuardrails tests ===============================
 
 #[test]
-fn mcp_guardrails_pass_through() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_pass_through__inner()) }
-async fn mcp_guardrails_pass_through__inner() {
+fn mcp_guardrails_pass_through() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_pass_through_inner_body()) }
+async fn mcp_guardrails_pass_through_inner_body() {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request, pass_response};
@@ -3380,8 +3380,8 @@ async fn mcp_guardrails_pass_through__inner() {
 }
 
 #[test]
-fn mcp_guardrails_reject_surfaces_jsonrpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_reject_surfaces_jsonrpc_error__inner()) }
-async fn mcp_guardrails_reject_surfaces_jsonrpc_error__inner() {
+fn mcp_guardrails_reject_surfaces_jsonrpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_reject_surfaces_jsonrpc_error_inner_body()) }
+async fn mcp_guardrails_reject_surfaces_jsonrpc_error_inner_body() {
 	use protos::ext_mcp::authorization_error::Code;
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response, reject_request};
@@ -3422,8 +3422,8 @@ async fn mcp_guardrails_reject_surfaces_jsonrpc_error__inner() {
 }
 
 #[test]
-fn mcp_guardrails_denies_tool_by_name() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_denies_tool_by_name__inner()) }
-async fn mcp_guardrails_denies_tool_by_name__inner() {
+fn mcp_guardrails_denies_tool_by_name() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_denies_tool_by_name_inner_body()) }
+async fn mcp_guardrails_denies_tool_by_name_inner_body() {
 	use protos::ext_mcp::authorization_error::Code;
 
 	use crate::test_helpers::extmcpmock::{
@@ -3493,8 +3493,8 @@ async fn mcp_guardrails_denies_tool_by_name__inner() {
 }
 
 #[test]
-fn mcp_guardrails_mutated_request_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_request_reaches_upstream__inner()) }
-async fn mcp_guardrails_mutated_request_reaches_upstream__inner() {
+fn mcp_guardrails_mutated_request_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_request_reaches_upstream_inner_body()) }
+async fn mcp_guardrails_mutated_request_reaches_upstream_inner_body() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_request_json, pass_request, pass_response,
 	};
@@ -3545,8 +3545,8 @@ async fn mcp_guardrails_mutated_request_reaches_upstream__inner() {
 }
 
 #[test]
-fn mcp_guardrails_metadata_cel_evaluated_per_request() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_cel_evaluated_per_request__inner()) }
-async fn mcp_guardrails_metadata_cel_evaluated_per_request__inner() {
+fn mcp_guardrails_metadata_cel_evaluated_per_request() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_cel_evaluated_per_request_inner_body()) }
+async fn mcp_guardrails_metadata_cel_evaluated_per_request_inner_body() {
 	use std::collections::HashMap;
 	use std::sync::Mutex as StdMutex;
 
@@ -3609,8 +3609,8 @@ async fn mcp_guardrails_metadata_cel_evaluated_per_request__inner() {
 // mcpGuardrails returns metadata in its request result; an MCP authorization rule then
 // denies a tool based on that metadata (the inbound metadata -> CEL authz path).
 #[test]
-fn mcp_guardrails_metadata_consumed_by_authz() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_consumed_by_authz__inner()) }
-async fn mcp_guardrails_metadata_consumed_by_authz__inner() {
+fn mcp_guardrails_metadata_consumed_by_authz() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_consumed_by_authz_inner_body()) }
+async fn mcp_guardrails_metadata_consumed_by_authz_inner_body() {
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request_with, pass_response};
 
 	let extmcp_mock = closure_mock(
@@ -3663,8 +3663,8 @@ async fn mcp_guardrails_metadata_consumed_by_authz__inner() {
 
 // Simiilar to mcp_guardrails_metadata_consumed_by_authz but for the fanout path.
 #[test]
-fn mcp_guardrails_metadata_consumed_by_list_authz() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_consumed_by_list_authz__inner()) }
-async fn mcp_guardrails_metadata_consumed_by_list_authz__inner() {
+fn mcp_guardrails_metadata_consumed_by_list_authz() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_consumed_by_list_authz_inner_body()) }
+async fn mcp_guardrails_metadata_consumed_by_list_authz_inner_body() {
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request_with, pass_response};
 
 	let extmcp_mock = closure_mock(
@@ -3725,8 +3725,8 @@ async fn mcp_guardrails_metadata_consumed_by_list_authz__inner() {
 }
 
 #[test]
-fn mcp_guardrails_filtered_list_via_response_mutation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_filtered_list_via_response_mutation__inner()) }
-async fn mcp_guardrails_filtered_list_via_response_mutation__inner() {
+fn mcp_guardrails_filtered_list_via_response_mutation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_filtered_list_via_response_mutation_inner_body()) }
+async fn mcp_guardrails_filtered_list_via_response_mutation_inner_body() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_response_json, pass_request, pass_response,
 	};
@@ -3770,8 +3770,8 @@ async fn mcp_guardrails_filtered_list_via_response_mutation__inner() {
 // rather than once per upstream: the processor sees a single checkResponse carrying
 // the prefixed (`a_echo`, `b_echo`) tools and every backend in service_names.
 #[test]
-fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fanout_runs_once_on_merged_muxed_result__inner()) }
-async fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result__inner() {
+fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fanout_runs_once_on_merged_muxed_result_inner_body()) }
+async fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result_inner_body() {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::sync::{Arc, Mutex};
 
@@ -3865,8 +3865,8 @@ async fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result__inner() {
 // A mutated `tools/call` result must round-trip back through `ServerResult` and
 // reach the client (the `*/list` case above exercises a different variant).
 #[test]
-fn mcp_guardrails_mutated_tool_call_response_reaches_client() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_tool_call_response_reaches_client__inner()) }
-async fn mcp_guardrails_mutated_tool_call_response_reaches_client__inner() {
+fn mcp_guardrails_mutated_tool_call_response_reaches_client() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_tool_call_response_reaches_client_inner_body()) }
+async fn mcp_guardrails_mutated_tool_call_response_reaches_client_inner_body() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_response_json, pass_request, pass_response,
 	};
@@ -3912,8 +3912,8 @@ async fn mcp_guardrails_mutated_tool_call_response_reaches_client__inner() {
 }
 
 #[test]
-fn mcp_guardrails_fail_open_on_grpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fail_open_on_grpc_error__inner()) }
-async fn mcp_guardrails_fail_open_on_grpc_error__inner() {
+fn mcp_guardrails_fail_open_on_grpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fail_open_on_grpc_error_inner_body()) }
+async fn mcp_guardrails_fail_open_on_grpc_error_inner_body() {
 	use std::collections::HashMap;
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
@@ -3951,8 +3951,8 @@ async fn mcp_guardrails_fail_open_on_grpc_error__inner() {
 }
 
 #[test]
-fn mcp_guardrails_fail_closed_on_grpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fail_closed_on_grpc_error__inner()) }
-async fn mcp_guardrails_fail_closed_on_grpc_error__inner() {
+fn mcp_guardrails_fail_closed_on_grpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fail_closed_on_grpc_error_inner_body()) }
+async fn mcp_guardrails_fail_closed_on_grpc_error_inner_body() {
 	use std::collections::HashMap;
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
@@ -4001,8 +4001,8 @@ async fn mcp_guardrails_fail_closed_on_grpc_error__inner() {
 }
 
 #[test]
-fn mcp_guardrails_response_reject_surfaces_jsonrpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_response_reject_surfaces_jsonrpc_error__inner()) }
-async fn mcp_guardrails_response_reject_surfaces_jsonrpc_error__inner() {
+fn mcp_guardrails_response_reject_surfaces_jsonrpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_response_reject_surfaces_jsonrpc_error_inner_body()) }
+async fn mcp_guardrails_response_reject_surfaces_jsonrpc_error_inner_body() {
 	use protos::ext_mcp::authorization_error::Code;
 
 	use crate::test_helpers::extmcpmock::{
@@ -4050,8 +4050,8 @@ async fn mcp_guardrails_response_reject_surfaces_jsonrpc_error__inner() {
 }
 
 #[test]
-fn mcp_guardrails_protocol_violation_fails_closed() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_protocol_violation_fails_closed__inner()) }
-async fn mcp_guardrails_protocol_violation_fails_closed__inner() {
+fn mcp_guardrails_protocol_violation_fails_closed() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_protocol_violation_fails_closed_inner_body()) }
+async fn mcp_guardrails_protocol_violation_fails_closed_inner_body() {
 	use crate::mcp::guardrails::wire;
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
 
@@ -4109,8 +4109,8 @@ async fn mcp_guardrails_protocol_violation_fails_closed__inner() {
 }
 
 #[test]
-fn mcp_guardrails_non_object_mutation_is_protocol_violation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_non_object_mutation_is_protocol_violation__inner()) }
-async fn mcp_guardrails_non_object_mutation_is_protocol_violation__inner() {
+fn mcp_guardrails_non_object_mutation_is_protocol_violation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_non_object_mutation_is_protocol_violation_inner_body()) }
+async fn mcp_guardrails_non_object_mutation_is_protocol_violation_inner_body() {
 	use crate::test_helpers::extmcpmock::{closure_mock, mutated_request_json, pass_response};
 
 	// Mutated payloads must parse as the method's params; valid-but-wrong-shape
@@ -4155,8 +4155,8 @@ async fn mcp_guardrails_non_object_mutation_is_protocol_violation__inner() {
 }
 
 #[test]
-fn mcp_guardrails_header_mutation_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_header_mutation_reaches_upstream__inner()) }
-async fn mcp_guardrails_header_mutation_reaches_upstream__inner() {
+fn mcp_guardrails_header_mutation_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_header_mutation_reaches_upstream_inner_body()) }
+async fn mcp_guardrails_header_mutation_reaches_upstream_inner_body() {
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request_with, pass_response};
 
 	let extmcp_mock = closure_mock(
@@ -4214,8 +4214,8 @@ async fn mcp_guardrails_header_mutation_reaches_upstream__inner() {
 }
 
 #[test]
-fn mcp_guardrails_request_headers_visible_to_policy_server() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_request_headers_visible_to_policy_server__inner()) }
-async fn mcp_guardrails_request_headers_visible_to_policy_server__inner() {
+fn mcp_guardrails_request_headers_visible_to_policy_server() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_request_headers_visible_to_policy_server_inner_body()) }
+async fn mcp_guardrails_request_headers_visible_to_policy_server_inner_body() {
 	use std::sync::Mutex as StdMutex;
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request, pass_response};
@@ -4270,8 +4270,8 @@ async fn mcp_guardrails_request_headers_visible_to_policy_server__inner() {
 
 // mcpGuardrails processor metadata is readable as `guardrails.*` in an upstream-leg transformation.
 #[test]
-fn mcp_guardrails_request_metadata_usable_in_backend_transformation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_request_metadata_usable_in_backend_transformation__inner()) }
-async fn mcp_guardrails_request_metadata_usable_in_backend_transformation__inner() {
+fn mcp_guardrails_request_metadata_usable_in_backend_transformation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_request_metadata_usable_in_backend_transformation_inner_body()) }
+async fn mcp_guardrails_request_metadata_usable_in_backend_transformation_inner_body() {
 	use crate::http::transformation_cel::{
 		LocalTransform, LocalTransformationConfig, Transformation,
 	};
@@ -4336,8 +4336,8 @@ async fn mcp_guardrails_request_metadata_usable_in_backend_transformation__inner
 }
 
 #[test]
-fn mcp_guardrails_mutated_prompt_request_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_prompt_request_reaches_upstream__inner()) }
-async fn mcp_guardrails_mutated_prompt_request_reaches_upstream__inner() {
+fn mcp_guardrails_mutated_prompt_request_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_prompt_request_reaches_upstream_inner_body()) }
+async fn mcp_guardrails_mutated_prompt_request_reaches_upstream_inner_body() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_request_json, pass_request, pass_response,
 	};
@@ -4392,8 +4392,8 @@ async fn mcp_guardrails_mutated_prompt_request_reaches_upstream__inner() {
 }
 
 #[test]
-fn mcp_guardrails_mutated_resource_read_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_resource_read_reaches_upstream__inner()) }
-async fn mcp_guardrails_mutated_resource_read_reaches_upstream__inner() {
+fn mcp_guardrails_mutated_resource_read_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_resource_read_reaches_upstream_inner_body()) }
+async fn mcp_guardrails_mutated_resource_read_reaches_upstream_inner_body() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_request_json, pass_request, pass_response,
 	};
@@ -4597,8 +4597,8 @@ fn merge_tools_auth_on_upstream_rename_invisible_to_cel() {
 }
 
 #[test]
-fn flat_resolve_tool_call_uses_tools_list_route_index() { crate::mcp::tests::block_on_big_stack(flat_resolve_tool_call_uses_tools_list_route_index__inner()) }
-async fn flat_resolve_tool_call_uses_tools_list_route_index__inner() {
+fn flat_resolve_tool_call_uses_tools_list_route_index() { crate::mcp::tests::block_on_big_stack(flat_resolve_tool_call_uses_tools_list_route_index_inner_body()) }
+async fn flat_resolve_tool_call_uses_tools_list_route_index_inner_body() {
 	use std::borrow::Cow;
 	use std::sync::Arc;
 
@@ -4691,8 +4691,8 @@ async fn flat_resolve_tool_call_uses_tools_list_route_index__inner() {
 /// through to the broken pass-through fallback and return "ambiguous flat tool
 /// name" because the three rewrite-less targets each contributed a hit.
 #[test]
-fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation() { crate::mcp::tests::block_on_big_stack(flat_resolve_tool_call_routes_unique_name_in_four_target_federation__inner()) }
-async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation__inner() {
+fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation() { crate::mcp::tests::block_on_big_stack(flat_resolve_tool_call_routes_unique_name_in_four_target_federation_inner_body()) }
+async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation_inner_body() {
 	use std::borrow::Cow;
 	use std::sync::Arc;
 
@@ -4830,8 +4830,8 @@ async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation__in
 /// via `filter_flat_tool_collisions`, but the route index used to *remove*
 /// both, making the visible name unroutable.
 #[test]
-fn flat_route_index_first_wins_keeps_colliding_name_callable() { crate::mcp::tests::block_on_big_stack(flat_route_index_first_wins_keeps_colliding_name_callable__inner()) }
-async fn flat_route_index_first_wins_keeps_colliding_name_callable__inner() {
+fn flat_route_index_first_wins_keeps_colliding_name_callable() { crate::mcp::tests::block_on_big_stack(flat_route_index_first_wins_keeps_colliding_name_callable_inner_body()) }
+async fn flat_route_index_first_wins_keeps_colliding_name_callable_inner_body() {
 	use std::borrow::Cow;
 	use std::sync::Arc;
 
@@ -4905,8 +4905,8 @@ async fn flat_route_index_first_wins_keeps_colliding_name_callable__inner() {
 }
 
 #[test]
-fn resolve_tool_call_maps_exposed_to_upstream() { crate::mcp::tests::block_on_big_stack(resolve_tool_call_maps_exposed_to_upstream__inner()) }
-async fn resolve_tool_call_maps_exposed_to_upstream__inner() {
+fn resolve_tool_call_maps_exposed_to_upstream() { crate::mcp::tests::block_on_big_stack(resolve_tool_call_maps_exposed_to_upstream_inner_body()) }
+async fn resolve_tool_call_maps_exposed_to_upstream_inner_body() {
 	let rewrite = crate::mcp::rewrite::McpRewritePolicy::single_tool_rename("echo", "echo_renamed");
 	let relay = Relay::new(
 		McpBackendGroup {
@@ -5314,8 +5314,8 @@ fn flat_merge_tasks_preserves_create_recorded_route() {
 }
 
 #[test]
-fn ensure_flat_task_routes_loaded_noop_when_index_populated() { crate::mcp::tests::block_on_big_stack(ensure_flat_task_routes_loaded_noop_when_index_populated__inner()) }
-async fn ensure_flat_task_routes_loaded_noop_when_index_populated__inner() {
+fn ensure_flat_task_routes_loaded_noop_when_index_populated() { crate::mcp::tests::block_on_big_stack(ensure_flat_task_routes_loaded_noop_when_index_populated_inner_body()) }
+async fn ensure_flat_task_routes_loaded_noop_when_index_populated_inner_body() {
 	use crate::mcp::upstream::IncomingRequestContext;
 	use rmcp::model::{ListTasksResult, ServerResult, Task, TaskStatus};
 
@@ -5621,8 +5621,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse() { crate::mcp::tests::block_on_big_stack(send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse__inner()) }
-	async fn send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse__inner() {
+	fn send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse() { crate::mcp::tests::block_on_big_stack(send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse_inner_body()) }
+	async fn send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse_inner_body() {
 		let relay = Relay::new(
 			McpBackendGroup {
 				targets: vec![
@@ -5660,8 +5660,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn multiplex_read_resource_round_trips_federated_uri() { crate::mcp::tests::block_on_big_stack(multiplex_read_resource_round_trips_federated_uri__inner()) }
-	async fn multiplex_read_resource_round_trips_federated_uri__inner() {
+	fn multiplex_read_resource_round_trips_federated_uri() { crate::mcp::tests::block_on_big_stack(multiplex_read_resource_round_trips_federated_uri_inner_body()) }
+	async fn multiplex_read_resource_round_trips_federated_uri_inner_body() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -5695,8 +5695,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream() { crate::mcp::tests::block_on_big_stack(multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream__inner()) }
-	async fn multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream__inner() {
+	fn multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream() { crate::mcp::tests::block_on_big_stack(multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream_inner_body()) }
+	async fn multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream_inner_body() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -5726,8 +5726,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn multiplex_call_tool_wraps_ui_resource_uri_in_response_meta() { crate::mcp::tests::block_on_big_stack(multiplex_call_tool_wraps_ui_resource_uri_in_response_meta__inner()) }
-	async fn multiplex_call_tool_wraps_ui_resource_uri_in_response_meta__inner() {
+	fn multiplex_call_tool_wraps_ui_resource_uri_in_response_meta() { crate::mcp::tests::block_on_big_stack(multiplex_call_tool_wraps_ui_resource_uri_in_response_meta_inner_body()) }
+	async fn multiplex_call_tool_wraps_ui_resource_uri_in_response_meta_inner_body() {
 		// Without wrapping the call-tool response's `_meta.ui.resourceUri`, the host
 		// receives the upstream-native `ui://...` and a subsequent `resources/read`
 		// fails the multiplex parser with "missing 'u' query param". This regression
@@ -5783,8 +5783,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content() { crate::mcp::tests::block_on_big_stack(multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content__inner()) }
-	async fn multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content__inner() {
+	fn multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content() { crate::mcp::tests::block_on_big_stack(multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content_inner_body()) }
+	async fn multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content_inner_body() {
 		// A2UI sample tools return `ui://...` via EmbeddedResource content blocks rather than
 		// `_meta.ui.resourceUri`. Without wrapping, federated `resources/read` fails multiplex parsing.
 		let mock_a = mock_streamable_http_server(true).await;
@@ -5827,8 +5827,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn multiplex_initialize_advertises_prompts_capability() { crate::mcp::tests::block_on_big_stack(multiplex_initialize_advertises_prompts_capability__inner()) }
-	async fn multiplex_initialize_advertises_prompts_capability__inner() {
+	fn multiplex_initialize_advertises_prompts_capability() { crate::mcp::tests::block_on_big_stack(multiplex_initialize_advertises_prompts_capability_inner_body()) }
+	async fn multiplex_initialize_advertises_prompts_capability_inner_body() {
 		// MCP Apps hosts (e.g. MCP Inspector) gate prompt UI on the server advertising
 		// the `prompts` capability. Since the gateway multiplexes prompt names via the
 		// `target_` prefix, prompts are safely federated and must be advertised even
@@ -5864,8 +5864,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn multiplex_initialize_advertises_full_tasks_capability() { crate::mcp::tests::block_on_big_stack(multiplex_initialize_advertises_full_tasks_capability__inner()) }
-	async fn multiplex_initialize_advertises_full_tasks_capability__inner() {
+	fn multiplex_initialize_advertises_full_tasks_capability() { crate::mcp::tests::block_on_big_stack(multiplex_initialize_advertises_full_tasks_capability_inner_body()) }
+	async fn multiplex_initialize_advertises_full_tasks_capability_inner_body() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -5904,8 +5904,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn multiplex_tasks_merge_list_get_and_cancel_unwrap_ids() { crate::mcp::tests::block_on_big_stack(multiplex_tasks_merge_list_get_and_cancel_unwrap_ids__inner()) }
-	async fn multiplex_tasks_merge_list_get_and_cancel_unwrap_ids__inner() {
+	fn multiplex_tasks_merge_list_get_and_cancel_unwrap_ids() { crate::mcp::tests::block_on_big_stack(multiplex_tasks_merge_list_get_and_cancel_unwrap_ids_inner_body()) }
+	async fn multiplex_tasks_merge_list_get_and_cancel_unwrap_ids_inner_body() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -5983,8 +5983,8 @@ mod adobe_mcp_apps_integration {
 	}
 
 	#[test]
-	fn multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps() { crate::mcp::tests::block_on_big_stack(multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps__inner()) }
-	async fn multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps__inner() {
+	fn multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps() { crate::mcp::tests::block_on_big_stack(multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps_inner_body()) }
+	async fn multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps_inner_body() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6368,8 +6368,8 @@ mod federated_elicitation_tests {
 	// requests such as elicitation/create are delivered on that GET fanout, not via a
 	// gateway-owned background upstream GET.
 	#[test]
-	fn federated_elicitation_round_trip_completes() { crate::mcp::tests::block_on_big_stack(federated_elicitation_round_trip_completes__inner()) }
-	async fn federated_elicitation_round_trip_completes__inner() {
+	fn federated_elicitation_round_trip_completes() { crate::mcp::tests::block_on_big_stack(federated_elicitation_round_trip_completes_inner_body()) }
+	async fn federated_elicitation_round_trip_completes_inner_body() {
 		let elicit = mock_elicitation_server().await;
 		let plain = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6422,8 +6422,8 @@ mod federated_elicitation_tests {
 	}
 
 	#[test]
-	fn federated_elicitation_decline_round_trip() { crate::mcp::tests::block_on_big_stack(federated_elicitation_decline_round_trip__inner()) }
-	async fn federated_elicitation_decline_round_trip__inner() {
+	fn federated_elicitation_decline_round_trip() { crate::mcp::tests::block_on_big_stack(federated_elicitation_decline_round_trip_inner_body()) }
+	async fn federated_elicitation_decline_round_trip_inner_body() {
 		let elicit = mock_elicitation_server().await;
 		let plain = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6453,8 +6453,8 @@ mod federated_elicitation_tests {
 	}
 
 	#[test]
-	fn federated_elicitation_cancel_round_trip() { crate::mcp::tests::block_on_big_stack(federated_elicitation_cancel_round_trip__inner()) }
-	async fn federated_elicitation_cancel_round_trip__inner() {
+	fn federated_elicitation_cancel_round_trip() { crate::mcp::tests::block_on_big_stack(federated_elicitation_cancel_round_trip_inner_body()) }
+	async fn federated_elicitation_cancel_round_trip_inner_body() {
 		let elicit = mock_elicitation_server().await;
 		let plain = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6484,8 +6484,8 @@ mod federated_elicitation_tests {
 	}
 
 	#[test]
-	fn federated_tools_call_cancel_routes_to_single_upstream() { crate::mcp::tests::block_on_big_stack(federated_tools_call_cancel_routes_to_single_upstream__inner()) }
-	async fn federated_tools_call_cancel_routes_to_single_upstream__inner() {
+	fn federated_tools_call_cancel_routes_to_single_upstream() { crate::mcp::tests::block_on_big_stack(federated_tools_call_cancel_routes_to_single_upstream_inner_body()) }
+	async fn federated_tools_call_cancel_routes_to_single_upstream_inner_body() {
 		let started = Arc::new(tokio::sync::Notify::new());
 		let tool_cancelled = Arc::new(tokio::sync::Notify::new());
 		let call_id = Arc::new(Mutex::new(None));
@@ -6699,8 +6699,8 @@ mod federated_progress_tests {
 	}
 
 	#[test]
-	fn federated_progress_relayed_unchanged() { crate::mcp::tests::block_on_big_stack(federated_progress_relayed_unchanged__inner()) }
-	async fn federated_progress_relayed_unchanged__inner() {
+	fn federated_progress_relayed_unchanged() { crate::mcp::tests::block_on_big_stack(federated_progress_relayed_unchanged_inner_body()) }
+	async fn federated_progress_relayed_unchanged_inner_body() {
 		let progress = mock_progress_server().await;
 		let plain = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6758,8 +6758,8 @@ mod histogram_tests {
 
 	/// I1 - single tools/call against a single-target MCP backend.
 	#[test]
-	fn histogram_records_single_tools_call() { crate::mcp::tests::block_on_big_stack(histogram_records_single_tools_call__inner()) }
-	async fn histogram_records_single_tools_call__inner() {
+	fn histogram_records_single_tools_call() { crate::mcp::tests::block_on_big_stack(histogram_records_single_tools_call_inner_body()) }
+	async fn histogram_records_single_tools_call_inner_body() {
 		let mock = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -6806,8 +6806,8 @@ mod histogram_tests {
 	/// I2 - federated MCP backend; two servers must produce two distinct series.
 	/// This is the central story-validating test.
 	#[test]
-	fn histogram_breaks_down_by_server_in_federation() { crate::mcp::tests::block_on_big_stack(histogram_breaks_down_by_server_in_federation__inner()) }
-	async fn histogram_breaks_down_by_server_in_federation__inner() {
+	fn histogram_breaks_down_by_server_in_federation() { crate::mcp::tests::block_on_big_stack(histogram_breaks_down_by_server_in_federation_inner_body()) }
+	async fn histogram_breaks_down_by_server_in_federation_inner_body() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
@@ -6859,8 +6859,8 @@ mod histogram_tests {
 	/// I3 - protocol methods (initialize/tools/list/notifications/initialized) show up
 	/// with `server="unknown"`, matching the existing mcp_requests counter.
 	#[test]
-	fn histogram_observes_non_tools_call_methods() { crate::mcp::tests::block_on_big_stack(histogram_observes_non_tools_call_methods__inner()) }
-	async fn histogram_observes_non_tools_call_methods__inner() {
+	fn histogram_observes_non_tools_call_methods() { crate::mcp::tests::block_on_big_stack(histogram_observes_non_tools_call_methods_inner_body()) }
+	async fn histogram_observes_non_tools_call_methods_inner_body() {
 		let mock = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -6893,8 +6893,8 @@ mod histogram_tests {
 	/// I4 - opening an SSE stream without sending any JSON-RPC must NOT emit a histogram
 	/// series. Distinguishes the new histogram from the broader HTTP request_duration.
 	#[test]
-	fn histogram_excludes_sse_bootstrap_get() { crate::mcp::tests::block_on_big_stack(histogram_excludes_sse_bootstrap_get__inner()) }
-	async fn histogram_excludes_sse_bootstrap_get__inner() {
+	fn histogram_excludes_sse_bootstrap_get() { crate::mcp::tests::block_on_big_stack(histogram_excludes_sse_bootstrap_get_inner_body()) }
+	async fn histogram_excludes_sse_bootstrap_get_inner_body() {
 		use std::time::Duration;
 
 		let mock = mock_streamable_http_server(true).await;
@@ -6931,8 +6931,8 @@ mod histogram_tests {
 	/// I5 - when the upstream returns an error, the histogram still observes the call.
 	/// Validates analysis §5.3.
 	#[test]
-	fn histogram_observes_upstream_error_latency() { crate::mcp::tests::block_on_big_stack(histogram_observes_upstream_error_latency__inner()) }
-	async fn histogram_observes_upstream_error_latency__inner() {
+	fn histogram_observes_upstream_error_latency() { crate::mcp::tests::block_on_big_stack(histogram_observes_upstream_error_latency_inner_body()) }
+	async fn histogram_observes_upstream_error_latency_inner_body() {
 		let dead: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -6975,8 +6975,8 @@ mod histogram_tests {
 	/// I6 - for the same MCPCall label set, `mcp_request_duration_seconds_count` must
 	/// match `mcp_requests_total`. Regression guard against the two call sites diverging.
 	#[test]
-	fn histogram_count_matches_counter_for_same_label_set() { crate::mcp::tests::block_on_big_stack(histogram_count_matches_counter_for_same_label_set__inner()) }
-	async fn histogram_count_matches_counter_for_same_label_set__inner() {
+	fn histogram_count_matches_counter_for_same_label_set() { crate::mcp::tests::block_on_big_stack(histogram_count_matches_counter_for_same_label_set_inner_body()) }
+	async fn histogram_count_matches_counter_for_same_label_set_inner_body() {
 		let mock = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -7020,8 +7020,8 @@ mod histogram_tests {
 
 	/// I7 - one fast call + one slow call; the `le="0.01"` bucket holds 1, `le="0.5"` holds 2.
 	#[test]
-	fn histogram_bucket_distribution_matches_observation() { crate::mcp::tests::block_on_big_stack(histogram_bucket_distribution_matches_observation__inner()) }
-	async fn histogram_bucket_distribution_matches_observation__inner() {
+	fn histogram_bucket_distribution_matches_observation() { crate::mcp::tests::block_on_big_stack(histogram_bucket_distribution_matches_observation_inner_body()) }
+	async fn histogram_bucket_distribution_matches_observation_inner_body() {
 		use std::time::Duration;
 
 		let fast = mock_streamable_http_server(true).await;
@@ -7091,8 +7091,8 @@ mod histogram_tests {
 
 	/// I8 - the histogram carries the flattened RouteIdentifier (bind/gateway/listener/route/route_rule).
 	#[test]
-	fn histogram_carries_full_route_identifier_labels() { crate::mcp::tests::block_on_big_stack(histogram_carries_full_route_identifier_labels__inner()) }
-	async fn histogram_carries_full_route_identifier_labels__inner() {
+	fn histogram_carries_full_route_identifier_labels() { crate::mcp::tests::block_on_big_stack(histogram_carries_full_route_identifier_labels_inner_body()) }
+	async fn histogram_carries_full_route_identifier_labels_inner_body() {
 		let mock = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -7128,8 +7128,8 @@ mod histogram_tests {
 	/// I9 - a request that finalises with no MCP context attached must produce
 	/// neither `mcp_requests_total` nor `mcp_request_duration_seconds`.
 	#[test]
-	fn histogram_silent_when_mcp_context_absent() { crate::mcp::tests::block_on_big_stack(histogram_silent_when_mcp_context_absent__inner()) }
-	async fn histogram_silent_when_mcp_context_absent__inner() {
+	fn histogram_silent_when_mcp_context_absent() { crate::mcp::tests::block_on_big_stack(histogram_silent_when_mcp_context_absent_inner_body()) }
+	async fn histogram_silent_when_mcp_context_absent_inner_body() {
 		use std::time::Duration;
 
 		let t = setup_with_registry("{}").unwrap().with_bind(simple_bind());
