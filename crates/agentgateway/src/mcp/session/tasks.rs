@@ -92,14 +92,14 @@ pub(super) async fn handle_list_tasks(
 	session: &Session,
 	r: JsonRpcRequest<ClientRequest>,
 	ctx: IncomingRequestContext,
-	cel: rbac::CelExecWrapper,
+	_cel: rbac::CelExecWrapper,
 ) -> Result<Response, UpstreamError> {
 	let relay = session.relay();
 	let targets = relay
 		.capabilities
 		.upstreams_with_tasks(&relay.all_target_names());
 	relay
-		.send_fanout_to(&targets, r, ctx, relay.merge_tasks(cel))
+		.send_fanout_to(&targets, r, ctx, relay.merge_tasks())
 		.await
 }
 
