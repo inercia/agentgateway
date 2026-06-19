@@ -98,9 +98,7 @@ impl Client {
 			.map_err(ClientError::new)?;
 
 		self.maybe_insert_session_id(&mut req)?;
-
 		ctx.apply(&mut req).map_err(ClientError::new)?;
-
 		let resp = self.http_client.call(req).await?;
 
 		// MCP spec has 202 only but some servers in the wild return 204. This is close enough for us to massage it.
