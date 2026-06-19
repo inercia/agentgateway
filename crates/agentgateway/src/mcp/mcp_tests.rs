@@ -4386,6 +4386,13 @@ async fn mcp_guardrails_mutated_resource_read_reaches_upstream() {
 	assert!(text.contains("Business Intelligence Memo"));
 }
 
+// ============================================================================================
+// ADOBE-ONLY TESTS — keep ALL `#[cfg(feature = "adobe")]` test modules below this marker, at
+// the END of this file. Upstream test additions land ABOVE this line, so the Adobe block stays
+// out of the way and rebases cleanly each sync (no interleaving with upstream tests).
+// New Adobe test modules: add them here (below), never above this marker.
+// ============================================================================================
+
 #[cfg(feature = "adobe")]
 mod mcp_rewrite_tests {
 	use super::*;
