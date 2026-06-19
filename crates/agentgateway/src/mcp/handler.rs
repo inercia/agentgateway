@@ -1030,9 +1030,15 @@ impl Relay {
 				"unknown service {service_name}"
 			)));
 		};
+		let guardrails = self.build_guardrails_ctx(&r, &ctx, vec![service_name.to_string()]);
 		let stream = us.generic_stream(r, &ctx).await?;
 
-		messages_to_response_mapped(id, stream, mcp_log, map_msg)
+		// Response-phase guardrails (decision 2: applies to federated reads too) wrap the
+		// stream first; federated multiplex rewrap then runs via the map closure.
+		match guardrails {
+			Some(g) => messages_to_response_mapped(id, wrap_with_guardrails(stream, g), mcp_log, map_msg),
+			None => messages_to_response_mapped(id, stream, mcp_log, map_msg),
+		}
 	}
 
 	#[cfg(feature = "adobe")]
@@ -1054,12 +1060,18 @@ impl Relay {
 				"unknown service {service_name}"
 			)));
 		};
+		let guardrails = self.build_guardrails_ctx(&r, &ctx, vec![service_name.to_string()]);
 		let stream = us
 			.generic_stream(r, &ctx)
 			.await?
 			.register_cancellable(in_flight, id.clone(), service_name.to_string());
 
-		messages_to_response_mapped(id, stream, mcp_log, map_msg)
+		// Response-phase guardrails wrap the stream first; cancellation + multiplex rewrap
+		// then run via the map closure (full federation guardrails support).
+		match guardrails {
+			Some(g) => messages_to_response_mapped(id, wrap_with_guardrails(stream, g), mcp_log, map_msg),
+			None => messages_to_response_mapped(id, stream, mcp_log, map_msg),
+		}
 	}
 
 	pub async fn send_notification(
