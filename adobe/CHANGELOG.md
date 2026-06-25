@@ -55,6 +55,14 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 - Build: architecture suffix in `adobe/Makefile` now extracted from the `PLATFORM` variable instead of being hard-coded, fixing cross-arch snapshot builds.
 - Dev: local environment setup docs moved to a separate file (`.devcontainer` workflow); minor fork-friendliness refactors.
 
+## 1.2.4
+
+- **MCP usage rate limiting (`mcpGuardrails` native `rateLimit` processor):** enforce per-method limits via ExtMCP against GTS — request-phase peek/check, response-phase increment for `peek` descriptors, with `failOpen` / `failClosed` when the rate-limit service is unavailable (`#[cfg(feature = "adobe")]`).
+- **Descriptor model:** CEL-evaluated descriptor entries, per-descriptor `limitOverride`, optional `peek` (check without charging on the request; charge on successful response).
+- **Denial shaping:** `rejectionOverrides` on the rate-limit processor reshape over-limit responses as JSON-RPC errors or `tools/call` `ToolResult` denials, with optional HTTP status/headers; CEL context includes `guardrail.rateLimit.*` plus request/MCP/JWT fields.
+- **Federation:** rate-limit guardrails run on federated MCP paths (merged fanout request/response hooks) with client-facing vs upstream-facing MCP metadata preserved for response accounting.
+- **Wire / control plane:** ExtMCP rate-limit metadata on `CheckRequest` / `CheckResponse`; pair with agentlink `AIPolicy` / `AIBackend` MCP guardrails + rate-limit CRDs and GTS ExtMCP rate-limit service.
+
 ## 1.2.3
 
 - **Federated MCP elicitation (and other server-initiated requests):** route client JSON-RPC `Response` / `Error` messages back to the originating upstream instead of rejecting them with `unsupported message type` (HTTP 500).

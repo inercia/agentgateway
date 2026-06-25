@@ -2383,6 +2383,106 @@
               ]
             }
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "domain": {
+              "description": "Rate-limit domain sent to the platform RLS service.",
+              "type": "string"
+            },
+            "policies": {
+              "description": "Policies used when connecting to the platform RLS backend.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SimpleLocalBackendPolicies"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "descriptors": {
+              "description": "Rate-limit descriptors evaluated from request and MCP context.",
+              "$ref": "#/$defs/RateLimitDescriptorSet"
+            },
+            "failureMode": {
+              "description": "Behavior when the peek call to the rate-limit service fails.",
+              "$ref": "#/$defs/FailureMode",
+              "default": "failClosed"
+            },
+            "rejectionOverrides": {
+              "description": "Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:\n`guardrail.rateLimit.*`, plus request/mcp/jwt context.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RateLimitRejectionOverride"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "rateLimit"
+            }
+          },
+          "required": [
+            "kind",
+            "domain",
+            "descriptors"
+          ],
+          "oneOf": [
+            {
+              "description": "Service reference. Service must be defined in the top level services list.",
+              "type": "object",
+              "properties": {
+                "service": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "$ref": "#/$defs/NamespacedHostname"
+                    },
+                    "port": {
+                      "type": "integer",
+                      "format": "uint16",
+                      "minimum": 0,
+                      "maximum": 65535
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "port"
+                  ]
+                }
+              },
+              "required": [
+                "service"
+              ]
+            },
+            {
+              "description": "Hostname or IP address",
+              "type": "object",
+              "properties": {
+                "host": {
+                  "description": "Hostname or IP address",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "backend": {
+                  "description": "Explicit backend reference. Backend must be defined in the top level backends list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "backend"
+              ]
+            }
+          ]
         }
       ]
     },
@@ -3295,6 +3395,214 @@
     },
     "HeaderOrPseudo": {
       "type": "string"
+    },
+    "RateLimitDescriptorSet": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RateLimitDescriptorEntry"
+      }
+    },
+    "RateLimitDescriptorEntry": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RateLimitDescriptorSerde"
+          }
+        },
+        "type": {
+          "$ref": "#/$defs/RateLimitType",
+          "default": "requests"
+        },
+        "unit": {
+          "$ref": "#/$defs/RateLimitType",
+          "default": "requests"
+        },
+        "limitOverride": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expression"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "peek": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entries"
+      ],
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "type",
+              "unit"
+            ]
+          }
+        }
+      ]
+    },
+    "RateLimitDescriptorSerde": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "expression": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "key"
+              ]
+            },
+            {
+              "required": [
+                "name"
+              ]
+            }
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "key",
+              "name"
+            ]
+          }
+        },
+        {
+          "anyOf": [
+            {
+              "required": [
+                "expression"
+              ]
+            },
+            {
+              "required": [
+                "value"
+              ]
+            }
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "expression",
+              "value"
+            ]
+          }
+        }
+      ]
+    },
+    "RateLimitType": {
+      "oneOf": [
+        {
+          "description": "Count each request as one unit.",
+          "type": "string",
+          "const": "requests"
+        },
+        {
+          "description": "Count LLM token usage.",
+          "type": "string",
+          "const": "tokens"
+        }
+      ]
+    },
+    "RateLimitRejectionOverride": {
+      "description": "Reshapes a rate-limit denial before it reaches the MCP client. Ignored for\nremote guardrail rejections.",
+      "type": "object",
+      "properties": {
+        "when": {
+          "$ref": "#/$defs/Expression"
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "body": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateLimitRejectionOverrideBody"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RateLimitRejectionOverrideHeader"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "when"
+      ]
+    },
+    "RateLimitRejectionOverrideBody": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "RateLimitRejectionOverrideHeader": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Expression"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value"
+      ]
     },
     "Authorization": {
       "$ref": "#/$defs/RuleSet"
@@ -4325,20 +4633,6 @@
       },
       "required": [
         "fillInterval"
-      ]
-    },
-    "RateLimitType": {
-      "oneOf": [
-        {
-          "description": "Count each request as one unit.",
-          "type": "string",
-          "const": "requests"
-        },
-        {
-          "description": "Count LLM token usage.",
-          "type": "string",
-          "const": "tokens"
-        }
       ]
     },
     "RateLimitSpec": {

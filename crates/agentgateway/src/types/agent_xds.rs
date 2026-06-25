@@ -580,7 +580,8 @@ fn convert_mcp_guardrails(
 ) -> Result<crate::mcp::guardrails::McpGuardrails, ProtoError> {
 	use proto::agent::backend_policy_spec::mcp_guardrails::processor::Kind as ProtoProcessorKind;
 	use proto::agent::backend_policy_spec::mcp_guardrails::{
-		FailureMode as ProtoFailureMode, Phase as ProtoPhase, Remote as ProtoRemote,
+		FailureMode as ProtoFailureMode, Phase as ProtoPhase, RateLimit as ProtoRateLimit,
+		Remote as ProtoRemote,
 	};
 
 	fn convert_methods(
@@ -649,11 +650,141 @@ fn convert_mcp_guardrails(
 		})
 	}
 
+	fn convert_rejection_overrides(
+		overrides: &[proto::agent::backend_policy_spec::mcp_guardrails::rate_limit::RejectionOverride],
+		diagnostics: &mut Diagnostics,
+		path: &str,
+	) -> Vec<crate::mcp::guardrails::RateLimitRejectionOverride> {
+		overrides
+			.iter()
+			.enumerate()
+			.map(|(idx, ro)| crate::mcp::guardrails::RateLimitRejectionOverride {
+				when: permissive_cel_expression_arc(
+					diagnostics,
+					format!("{path}[{idx}].when"),
+					&ro.when,
+				),
+				response_as: crate::mcp::guardrails::RejectionResponseAs::from_proto(ro.response_as),
+				status: (ro.status != 0)
+					.then(|| u16::try_from(ro.status).ok())
+					.flatten(),
+				body: ro
+					.body
+					.as_ref()
+					.map(|body| crate::mcp::guardrails::RateLimitRejectionOverrideBody {
+						code: body.code,
+						message: body.message.as_ref().map(|message| {
+							permissive_cel_expression_arc(
+								diagnostics,
+								format!("{path}[{idx}].body.message"),
+								message,
+							)
+						}),
+					}),
+				headers: ro
+					.headers
+					.iter()
+					.enumerate()
+					.map(
+						|(header_idx, header)| crate::mcp::guardrails::RateLimitRejectionOverrideHeader {
+							name: header.name.clone(),
+							value: permissive_cel_expression_arc(
+								diagnostics,
+								format!("{path}[{idx}].headers[{header_idx}].value"),
+								&header.value,
+							),
+						},
+					)
+					.collect(),
+			})
+			.collect()
+	}
+
+	fn convert_rate_limit(
+		r: &ProtoRateLimit,
+		diagnostics: &mut Diagnostics,
+		override_path: &str,
+	) -> crate::mcp::guardrails::RateLimit {
+		let descriptors = r
+			.descriptors
+			.iter()
+			.map(|d| {
+				let entries = d
+					.entries
+					.iter()
+					.map(|e| crate::mcp::guardrails::RateLimitDescriptor {
+						key: e.key.clone(),
+						value: permissive_cel_expression_arc(
+							diagnostics,
+							format!("backend.mcpGuardrails.rateLimit.descriptors.{}", e.key),
+							&e.value,
+						),
+					})
+					.collect::<Vec<_>>();
+				crate::mcp::guardrails::RateLimitDescriptorEntry {
+					entries: Arc::new(entries),
+					limit_type:
+						match proto::agent::backend_policy_spec::mcp_guardrails::rate_limit::Type::try_from(
+							d.r#type,
+						)
+						.unwrap_or(
+							proto::agent::backend_policy_spec::mcp_guardrails::rate_limit::Type::Requests,
+						) {
+							proto::agent::backend_policy_spec::mcp_guardrails::rate_limit::Type::Requests => {
+								http::localratelimit::RateLimitType::Requests
+							},
+							proto::agent::backend_policy_spec::mcp_guardrails::rate_limit::Type::Tokens => {
+								http::localratelimit::RateLimitType::Tokens
+							},
+						},
+					limit_override: d.limit_override.as_ref().map(|expr| {
+						permissive_cel_expression_arc(
+							diagnostics,
+							"backend.mcpGuardrails.rateLimit.limitOverride",
+							expr,
+						)
+					}),
+					peek: d.peek,
+				}
+			})
+			.collect::<Vec<_>>();
+		let failure_mode =
+			match proto::agent::backend_policy_spec::mcp_guardrails::rate_limit::FailureMode::try_from(
+				r.failure_mode,
+			) {
+				Ok(
+					proto::agent::backend_policy_spec::mcp_guardrails::rate_limit::FailureMode::FailOpen,
+				) => crate::mcp::guardrails::FailureMode::FailOpen,
+				_ => crate::mcp::guardrails::FailureMode::FailClosed,
+			};
+		crate::mcp::guardrails::RateLimit {
+			domain: r.domain.clone(),
+			target: Arc::new(resolve_simple_reference(r.target.as_ref())),
+			policies: Vec::new(),
+			descriptors: Arc::new(crate::mcp::guardrails::RateLimitDescriptorSet(descriptors)),
+			failure_mode,
+			rejection_overrides: convert_rejection_overrides(
+				&r.rejection_overrides,
+				diagnostics,
+				override_path,
+			),
+		}
+	}
+
 	let mut processors = Vec::with_capacity(em.processors.len());
-	for processor in &em.processors {
+	for (processor_idx, processor) in em.processors.iter().enumerate() {
 		let kind = match processor.kind.as_ref() {
 			Some(ProtoProcessorKind::Remote(r)) => {
 				crate::mcp::guardrails::ProcessorKind::Remote(convert_remote(r, diagnostics)?)
+			},
+			Some(ProtoProcessorKind::RateLimit(r)) => {
+				crate::mcp::guardrails::ProcessorKind::RateLimit(convert_rate_limit(
+					r,
+					diagnostics,
+					&format!(
+						"backend.mcpGuardrails.processors[{processor_idx}].rateLimit.rejectionOverrides"
+					),
+				))
 			},
 			None => {
 				diagnostics.add_warning("mcpGuardrails processor has no kind set; ignoring");
@@ -665,7 +796,10 @@ fn convert_mcp_guardrails(
 			diagnostics
 				.add_warning("mcpGuardrails processor configured with no methods; it will never run");
 		}
-		processors.push(crate::mcp::guardrails::Processor { methods, kind });
+		processors.push(crate::mcp::guardrails::Processor {
+			methods,
+			kind,
+		});
 	}
 
 	let ext = crate::mcp::guardrails::McpGuardrails { processors };

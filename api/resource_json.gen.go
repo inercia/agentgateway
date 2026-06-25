@@ -1612,6 +1612,72 @@ func (this *BackendPolicySpec_McpGuardrails_Remote) UnmarshalJSON(b []byte) erro
 	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
 }
 
+// MarshalJSON is a custom marshaler for BackendPolicySpec_McpGuardrails_RateLimit
+func (this *BackendPolicySpec_McpGuardrails_RateLimit) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_McpGuardrails_RateLimit
+func (this *BackendPolicySpec_McpGuardrails_RateLimit) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for BackendPolicySpec_McpGuardrails_RateLimit_Descriptor
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_Descriptor) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_McpGuardrails_RateLimit_Descriptor
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_Descriptor) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for BackendPolicySpec_McpGuardrails_RateLimit_Entry
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_Entry) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_McpGuardrails_RateLimit_Entry
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_Entry) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride_Body
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride_Body) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride_Body
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride_Body) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride_Header
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride_Header) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride_Header
+func (this *BackendPolicySpec_McpGuardrails_RateLimit_RejectionOverride_Header) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
 // MarshalJSON is a custom marshaler for BackendPolicySpec_McpGuardrails_Processor
 func (this *BackendPolicySpec_McpGuardrails_Processor) MarshalJSON() ([]byte, error) {
 	str, err := ResourceMarshaler.MarshalToString(this)
