@@ -135,6 +135,8 @@ impl McpRewriteSet {
 	pub fn resolve_flat_prompt(
 		&self,
 		exposed: &str,
+		_routes: Option<&HashMap<String, (String, String)>>,
+		_all_targets: &[String],
 	) -> Result<(String, String), crate::mcp::upstream::UpstreamError> {
 		Err(crate::mcp::upstream::UpstreamError::InvalidRequest(format!(
 			"unknown flat prompt name: {exposed}"
@@ -178,6 +180,12 @@ pub fn apply_prompt_rewrite(_prompt: &mut Prompt, _rules: &[CompiledItemRule]) {
 pub fn apply_resource_rewrite(_resource: &mut Resource, _rules: &[CompiledItemRule]) {}
 
 pub fn build_flat_tool_route_index(
+	_entries: impl IntoIterator<Item = (String, String, String)>,
+) -> HashMap<String, (String, String)> {
+	HashMap::new()
+}
+
+pub fn build_flat_prompt_route_index(
 	_entries: impl IntoIterator<Item = (String, String, String)>,
 ) -> HashMap<String, (String, String)> {
 	HashMap::new()

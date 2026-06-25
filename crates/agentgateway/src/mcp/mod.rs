@@ -94,8 +94,8 @@ pub enum Error {
 	// Intentionally do NOT say its not authorized; we hide the existence of the tool
 	#[error("Unknown {1}: {2}")]
 	Authorization(RequestId, String, String),
-	#[error("mcpGuardrails rejected: {}", .1.message)]
-	McpGuardrails(RequestId, rmcp::ErrorData),
+	#[error("mcpGuardrails rejected")]
+	McpGuardrails(RequestId, crate::mcp::guardrails::Rejection),
 	#[error("failed to process session_id query parameter")]
 	InvalidSessionIdQuery,
 	#[error("failed to establish get stream: {0}")]
@@ -202,6 +202,10 @@ pub struct MCPInfo {
 	/// Present for MCP task operations on the federated wire form.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub task: Option<ResourceId>,
+	/// Outcome signal for increment gating (`mcp.isError` in CEL). Set on the
+	/// response/increment path when the terminal MCP result is known.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub is_error: Option<bool>,
 }
 
 impl MCPInfo {
@@ -212,6 +216,7 @@ impl MCPInfo {
 			&& self.prompt.is_none()
 			&& self.resource.is_none()
 			&& self.task.is_none()
+			&& self.is_error.is_none()
 	}
 
 	pub fn resource_type(&self) -> Option<MCPOperation> {

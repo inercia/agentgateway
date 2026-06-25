@@ -1508,8 +1508,8 @@ message BackendPolicySpec {
   }
 
   // McpGuardrails is a backend-phase policy for MCP traffic: an ordered chain of
-  // policy processors. Today only the `remote` processor is defined — a custom
-  // gRPC policy server (the ExtMcp service) modeled on Envoy ext_authz.
+  // policy processors. Each processor is either a `remote` ExtMCP gRPC policy server
+  // or a platform-native `rate_limit` processor.
   message McpGuardrails {
     // Phase controls whether the request side, response side, or both of a
     // method are run through the guardrails pipeline.
@@ -1545,10 +1545,65 @@ message BackendPolicySpec {
       repeated string disallowed_request_headers = 5;
     }
 
-    // Processor is a single policy processor. Today only `remote` is defined.
+    // Configuration for the platform-native MCP rate-limit processor. The
+    // backend target is populated by platform translation, not by customer
+    // ExtMCP backendRef configuration.
+    message RateLimit {
+      string domain = 1;
+      repeated Descriptor descriptors = 2;
+      BackendReference target = 3;
+
+      enum Type {
+        REQUESTS = 0;
+        TOKENS = 1;
+      }
+      enum FailureMode {
+        FAIL_CLOSED = 0;
+        FAIL_OPEN = 1;
+      }
+      message Descriptor {
+        repeated Entry entries = 1;
+        Type type = 2;
+        optional string limit_override = 3;
+        bool peek = 4;
+      }
+      message Entry {
+        string key = 1;
+        string value = 2;
+      }
+      FailureMode failure_mode = 4;
+      // Rejection overrides applied when this rate-limit processor rejects.
+      repeated RejectionOverride rejection_overrides = 5;
+
+      message RejectionOverride {
+        string when = 1;
+        uint32 status = 2;
+        optional Body body = 3;
+        repeated Header headers = 4;
+        ResponseAs response_as = 5;
+
+        enum ResponseAs {
+          RESPONSE_AS_UNSPECIFIED = 0;
+          JSON_RPC_ERROR = 1;
+          TOOL_RESULT = 2;
+        }
+
+        message Body {
+          optional int32 code = 1;
+          optional string message = 2;
+        }
+        message Header {
+          string name = 1;
+          string value = 2;
+        }
+      }
+    }
+
+    // Processor is a single policy processor.
     message Processor {
       oneof kind {
         Remote remote = 1;
+        RateLimit rate_limit = 3;
       }
 
       // Allowlist of JSON-RPC methods (e.g. "tools/call", "tools/list") that run
@@ -1585,8 +1640,8 @@ message BackendPolicySpec {
     Health health = 15;
     BackendTunnel backend_tunnel = 16;
     TrafficPolicySpec.ExternalAuth ext_authz = 17;
-    McpGuardrails mcp_guardrails = 18;
-    McpRewrite mcp_rewrite = 19;
+    McpRewrite mcp_rewrite = 18;
+    McpGuardrails mcp_guardrails = 19;
   }
 }
 

@@ -11,8 +11,9 @@ use itertools::Itertools;
 use rmcp::ErrorData;
 use rmcp::model::{
 	ClientNotification, ClientRequest, JsonRpcNotification, JsonRpcRequest,
-	ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsRequest,
-	ListToolsResult, ProtocolVersion, RequestId, ServerJsonRpcMessage, ServerResult,
+	ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListPromptsRequest,
+	ListToolsRequest, ListToolsResult, ProtocolVersion, RequestId, ServerJsonRpcMessage,
+	ServerResult,
 };
 #[cfg(feature = "adobe")]
 use rmcp::model::ClientJsonRpcMessage;
@@ -25,8 +26,8 @@ use crate::mcp::mergestream::{MergeFn, Messages};
 use crate::mcp::multiplex_naming;
 use crate::mcp::rbac::{CelExecWrapper, McpAuthorizationSet};
 use crate::mcp::rewrite::{
-	apply_prompt_rewrite, apply_resource_rewrite, apply_tool_rewrite, build_flat_tool_route_index,
-	filter_flat_prompt_collisions, filter_flat_resource_collisions,
+	apply_prompt_rewrite, apply_resource_rewrite, apply_tool_rewrite, build_flat_prompt_route_index,
+	build_flat_tool_route_index, filter_flat_prompt_collisions, filter_flat_resource_collisions,
 	filter_flat_resource_template_collisions, filter_flat_tool_collisions,
 	CompiledServerRewrite, McpRewriteSet,
 };
@@ -56,6 +57,8 @@ pub struct Relay {
 	///
 	/// Always present on [`Relay`] (non-Adobe builds use stub `flat()` and never populate).
 	flat_tool_routes: Arc<RwLock<HashMap<String, (String, String)>>>,
+	/// Populated by federated `prompts/list` when `resourceNaming: Flat`; used by `prompts/get`.
+	flat_prompt_routes: Arc<RwLock<HashMap<String, (String, String)>>>,
 	/// Populated by federated `tasks/list` and `tools/call` create when `resourceNaming: Flat`.
 	///
 	/// Adobe-only: task RPCs are behind `feature = "adobe"`; tools index stays on `Relay` for
@@ -102,6 +105,7 @@ impl Relay {
 			#[cfg(feature = "adobe")]
 			capabilities: Arc::new(crate::mcp::mcp_apps::capabilities::TargetCapabilities::new()),
 			flat_tool_routes: Arc::new(RwLock::new(HashMap::new())),
+			flat_prompt_routes: Arc::new(RwLock::new(HashMap::new())),
 			#[cfg(feature = "adobe")]
 			flat_task_routes: Arc::new(RwLock::new(HashMap::new())),
 		})
@@ -116,6 +120,7 @@ impl Relay {
 			#[cfg(feature = "adobe")]
 			capabilities: self.capabilities.clone(),
 			flat_tool_routes: self.flat_tool_routes.clone(),
+			flat_prompt_routes: self.flat_prompt_routes.clone(),
 			#[cfg(feature = "adobe")]
 			flat_task_routes: self.flat_task_routes.clone(),
 		}
@@ -279,13 +284,60 @@ impl Relay {
 		Ok(())
 	}
 
+	/// Populate `flat_prompt_routes` via an internal `prompts/list` if it is empty.
+	///
+	/// Mirrors [`Self::ensure_flat_tool_routes_loaded`]: multi-replica sessions can resume on a
+	/// pod with an empty prompt route index after list-but-before-get.
+	async fn ensure_flat_prompt_routes_loaded(
+		&self,
+		ctx: &IncomingRequestContext,
+	) -> Result<(), UpstreamError> {
+		if !self.mcp_rewrite.flat() {
+			return Ok(());
+		}
+		if !self.flat_prompt_routes.read().is_empty() {
+			return Ok(());
+		}
+		#[cfg(feature = "adobe")]
+		let targets = self
+			.capabilities
+			.upstreams_with_prompts(&self.all_target_names());
+		#[cfg(not(feature = "adobe"))]
+		let targets = self.all_target_names();
+		if targets.is_empty() {
+			return Ok(());
+		}
+		let merge = self.merge_prompts();
+		let list_req: ListPromptsRequest = ListPromptsRequest::default();
+		let req = JsonRpcRequest::new(RequestId::Number(-1), ClientRequest::ListPromptsRequest(list_req));
+		let resp = match self
+			.send_fanout_to(&targets, req, ctx.clone(), merge)
+			.await
+		{
+			Ok(resp) => resp,
+			Err(e) => {
+				tracing::warn!(error = %e, "ensure_flat_prompt_routes_loaded: internal prompts/list failed");
+				return Ok(());
+			},
+		};
+		let _ = crate::http::read_resp_body(resp).await;
+		Ok(())
+	}
+
 	/// Resolve a client prompt name to `(target, upstream_name)`.
-	pub fn resolve_prompt_call(
+	pub async fn resolve_prompt_call(
 		&self,
 		client_name: &str,
+		ctx: &IncomingRequestContext,
 	) -> Result<(String, String), UpstreamError> {
 		if self.mcp_rewrite.flat() {
-			return self.mcp_rewrite.resolve_flat_prompt(client_name);
+			self.ensure_flat_prompt_routes_loaded(ctx).await?;
+			let routes = self.flat_prompt_routes.read();
+			return self.mcp_rewrite.resolve_flat_prompt(
+				client_name,
+				Some(&routes),
+				&self.all_target_names(),
+			);
 		}
 		let (target, exposed) = self.parse_resource_name(client_name)?;
 		let upstream = self
@@ -402,6 +454,11 @@ impl Relay {
 		Some(GuardrailsCtx {
 			ext: ext.clone(),
 			method,
+			mcp: ctx
+				.extensions()
+				.get::<crate::mcp::guardrails::GuardrailsRequestMcpInfo>()
+				.map(|info| info.0.clone())
+				.unwrap_or_else(|| guardrails_mcp_info(&r.request)),
 			backends,
 			client: self.policy_client.clone(),
 			req_ctx: Arc::new(ctx.clone()),
@@ -427,12 +484,16 @@ impl Relay {
 				Ok(Some(p))
 			},
 			Outcome::Reject(rej) => {
-				tracing::debug!(
-					method,
-					code = rej.code.0,
-					message = %rej.message,
-					"mcpGuardrails: request rejected",
-				);
+				if let crate::mcp::guardrails::McpDenialEnvelope::JsonRpc(ref error) = rej.envelope {
+					tracing::debug!(
+						method,
+						code = error.code.0,
+						message = %error.message,
+						"mcpGuardrails: request rejected",
+					);
+				} else {
+					tracing::debug!(method, "mcpGuardrails: request rejected with ToolResult");
+				}
 				Err(UpstreamError::McpGuardrails(rej))
 			},
 		}
@@ -458,13 +519,20 @@ impl Relay {
 		}
 		let params_b = serde_json::to_vec(&*params)
 			.map_err(|e| UpstreamError::InvalidRequest(format!("serialize {method} params: {e}")))?;
+		let params_bytes = bytes::Bytes::from(params_b);
+		ctx.extensions_mut().insert(
+			crate::mcp::guardrails::GuardrailsRequestMcpInfo(crate::mcp::guardrails::build_mcp_info(
+				method,
+				Some(&params_bytes),
+			)),
+		);
 		let backends = [backend.to_string()];
 		if let Some(p) = self
 			.run_guardrails_call_request::<P>(
 				&mut crate::mcp::guardrails::CallRequestCtx {
 					backends: &backends,
 					method,
-					params: Some(params_b.into()),
+					params: Some(params_bytes),
 				},
 				ctx,
 			)
@@ -605,7 +673,9 @@ impl Relay {
 		let rewrite = self.mcp_rewrite.clone();
 		let default_target_name = self.upstreams.default_target_name.clone();
 		let flat = rewrite.flat();
+		let flat_prompt_routes = self.flat_prompt_routes.clone();
 		Box::new(move |streams, cel| {
+			let mut route_entries = Vec::new();
 			let mut prompts = streams
 				.into_iter()
 				.flat_map(|(server_name, s)| {
@@ -626,10 +696,11 @@ impl Relay {
 							)
 						})
 						.map(|mut p| {
+							let upstream_name = p.name.clone();
 							if let Some(tr) = target_rules {
 								apply_prompt_rewrite(&mut p, &tr.prompts);
 							}
-							p.name = if flat {
+							let exposed = if flat {
 								p.name.clone()
 							} else {
 								multiplex_naming::resource_name(
@@ -638,12 +709,21 @@ impl Relay {
 									&p.name,
 								)
 							};
+							if flat {
+								route_entries.push((
+									server_name.to_string(),
+									upstream_name,
+									exposed.clone(),
+								));
+							}
+							p.name = exposed;
 							p
 						})
 						.collect_vec()
 				})
 				.collect_vec();
 			if flat {
+				*flat_prompt_routes.write() = build_flat_prompt_route_index(route_entries);
 				prompts = filter_flat_prompt_collisions(prompts);
 			}
 			Ok(
@@ -1024,20 +1104,20 @@ impl Relay {
 	where
 		F: FnMut(&mut ServerJsonRpcMessage) + Send + 'static,
 	{
-		let id = r.id.clone();
 		let Ok(us) = self.upstreams.get(service_name) else {
 			return Err(UpstreamError::InvalidRequest(format!(
 				"unknown service {service_name}"
 			)));
 		};
+		let id = r.id.clone();
 		let guardrails = self.build_guardrails_ctx(&r, &ctx, vec![service_name.to_string()]);
-		let stream = us.generic_stream(r, &ctx).await?;
+		let stream = map_server_messages(us.generic_stream(r, &ctx).await?, map_msg);
 
-		// Response-phase guardrails (decision 2: applies to federated reads too) wrap the
-		// stream first; federated multiplex rewrap then runs via the map closure.
 		match guardrails {
-			Some(g) => messages_to_response_mapped(id, wrap_with_guardrails(stream, g), mcp_log, map_msg),
-			None => messages_to_response_mapped(id, stream, mcp_log, map_msg),
+			Some(guardrails) => {
+				messages_to_response(id, wrap_with_guardrails(stream, guardrails), mcp_log)
+			},
+			None => messages_to_response(id, stream, mcp_log),
 		}
 	}
 
@@ -1054,23 +1134,25 @@ impl Relay {
 	where
 		F: FnMut(&mut ServerJsonRpcMessage) + Send + 'static,
 	{
-		let id = r.id.clone();
 		let Ok(us) = self.upstreams.get(service_name) else {
 			return Err(UpstreamError::InvalidRequest(format!(
 				"unknown service {service_name}"
 			)));
 		};
+		let id = r.id.clone();
 		let guardrails = self.build_guardrails_ctx(&r, &ctx, vec![service_name.to_string()]);
-		let stream = us
-			.generic_stream(r, &ctx)
-			.await?
-			.register_cancellable(in_flight, id.clone(), service_name.to_string());
+		let stream = us.generic_stream(r, &ctx).await?.register_cancellable(
+			in_flight,
+			id.clone(),
+			service_name.to_string(),
+		);
+		let stream = map_server_messages(stream, map_msg);
 
-		// Response-phase guardrails wrap the stream first; cancellation + multiplex rewrap
-		// then run via the map closure (full federation guardrails support).
 		match guardrails {
-			Some(g) => messages_to_response_mapped(id, wrap_with_guardrails(stream, g), mcp_log, map_msg),
-			None => messages_to_response_mapped(id, stream, mcp_log, map_msg),
+			Some(guardrails) => {
+				messages_to_response(id, wrap_with_guardrails(stream, guardrails), mcp_log)
+			},
+			None => messages_to_response(id, stream, mcp_log),
 		}
 	}
 
@@ -1328,6 +1410,22 @@ fn messages_to_response(
 	messages_to_response_mapped(id, stream, mcp_log, |_: &mut ServerJsonRpcMessage| {})
 }
 
+fn map_server_messages<F>(
+	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
+	mut map_msg: F,
+) -> impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static
+where
+	F: FnMut(&mut ServerJsonRpcMessage) + Send + 'static,
+{
+	use futures_util::StreamExt;
+	stream.map(move |rpc| {
+		rpc.map(|mut msg| {
+			map_msg(&mut msg);
+			msg
+		})
+	})
+}
+
 fn messages_to_response_mapped<F>(
 	id: RequestId,
 	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
@@ -1387,9 +1485,31 @@ pub fn setup_request_log(
 pub(crate) struct GuardrailsCtx {
 	pub ext: Arc<crate::mcp::guardrails::McpGuardrails>,
 	pub method: String,
+	pub mcp: crate::mcp::MCPInfo,
 	pub backends: Vec<String>,
 	pub client: PolicyClient,
 	pub req_ctx: Arc<IncomingRequestContext>,
+}
+
+fn guardrails_mcp_info(request: &ClientRequest) -> crate::mcp::MCPInfo {
+	let mut info = crate::mcp::MCPInfo {
+		method_name: Some(request.method().to_string()),
+		..Default::default()
+	};
+	match request {
+		ClientRequest::CallToolRequest(r) => {
+			info.set_tool(String::new(), r.params.name.to_string());
+			info.capture_call_arguments(r.params.arguments.clone());
+		},
+		ClientRequest::GetPromptRequest(r) => {
+			info.set_prompt(String::new(), r.params.name.clone());
+		},
+		ClientRequest::ReadResourceRequest(r) => {
+			info.set_resource(String::new(), r.params.uri.clone());
+		},
+		_ => {},
+	}
+	info
 }
 
 fn wrap_with_guardrails(
@@ -1473,6 +1593,7 @@ async fn apply_guardrails_response_intercept(
 		&ctx.backends,
 		json,
 		&ctx.req_ctx,
+		Some(&ctx.mcp),
 		&ctx.client,
 	)
 	.await
@@ -1481,7 +1602,7 @@ async fn apply_guardrails_response_intercept(
 		Outcome::Mutated(new_result) => {
 			Some(ServerJsonRpcMessage::response(new_result, resp.id.clone()))
 		},
-		Outcome::Reject(rej) => Some(ServerJsonRpcMessage::error(rej, resp.id.clone())),
+		Outcome::Reject(rej) => Some(rej.to_server_json_rpc_message(resp.id.clone())),
 	}
 }
 

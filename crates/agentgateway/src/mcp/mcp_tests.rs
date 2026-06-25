@@ -3316,6 +3316,91 @@ mod guardrails_test_support {
 		}))
 	}
 
+	/// Remote guardrails policy with rejection overrides on the processor.
+	/// Overrides are ignored unless the rejecting processor is rate-limit.
+	pub fn policy_with_overrides(
+		addr: SocketAddr,
+		_rejection_overrides: Vec<guardrails::RateLimitRejectionOverride>,
+	) -> BackendTrafficPolicy {
+		let remote = guardrails::Remote {
+			target: Arc::new(SimpleBackendReference::InlineBackend(Target::Address(addr))),
+			policies: Vec::new(),
+			failure_mode: guardrails::FailureMode::FailClosed,
+			metadata: HashMap::new(),
+			request_headers: Default::default(),
+		};
+		BackendTrafficPolicy::McpGuardrails(Arc::new(guardrails::McpGuardrails {
+			processors: vec![guardrails::Processor {
+				methods: default_methods(),
+				kind: guardrails::ProcessorKind::Remote(remote),
+			}],
+		}))
+	}
+
+	pub fn rate_limit_policy(
+		addr: SocketAddr,
+		rejection_overrides: Vec<guardrails::RateLimitRejectionOverride>,
+	) -> BackendTrafficPolicy {
+		rate_limit_policy_with_entry(addr, "tool", "mcp.tool.name", rejection_overrides)
+	}
+
+	pub fn rate_limit_policy_with_entry(
+		addr: SocketAddr,
+		key: &str,
+		value: &str,
+		rejection_overrides: Vec<guardrails::RateLimitRejectionOverride>,
+	) -> BackendTrafficPolicy {
+		rate_limit_policy_with_entry_and_peek(addr, key, value, true, rejection_overrides)
+	}
+
+	pub fn rate_limit_policy_with_entry_and_peek(
+		addr: SocketAddr,
+		key: &str,
+		value: &str,
+		peek: bool,
+		rejection_overrides: Vec<guardrails::RateLimitRejectionOverride>,
+	) -> BackendTrafficPolicy {
+		let rate_limit = guardrails::RateLimit {
+			domain: "mcp".to_string(),
+			target: Arc::new(SimpleBackendReference::InlineBackend(Target::Address(addr))),
+			policies: Vec::new(),
+			failure_mode: guardrails::FailureMode::FailClosed,
+			descriptors: Arc::new(guardrails::RateLimitDescriptorSet(vec![
+				guardrails::RateLimitDescriptorEntry {
+					entries: Arc::new(vec![guardrails::RateLimitDescriptor {
+						key: key.to_string(),
+						value: Arc::new(crate::cel::Expression::new_strict(value).unwrap()),
+					}]),
+					limit_type: crate::http::localratelimit::RateLimitType::Requests,
+					limit_override: None,
+					peek,
+				},
+			])),
+			rejection_overrides,
+		};
+		BackendTrafficPolicy::McpGuardrails(Arc::new(guardrails::McpGuardrails {
+			processors: vec![guardrails::Processor {
+				methods: default_methods(),
+				kind: guardrails::ProcessorKind::RateLimit(rate_limit),
+			}],
+		}))
+	}
+
+	pub fn rejection_override(when: &str, code: i32, message: &str) -> guardrails::RateLimitRejectionOverride {
+		guardrails::RateLimitRejectionOverride {
+			when: Arc::new(crate::cel::Expression::new_strict(when).unwrap()),
+			response_as: guardrails::RejectionResponseAs::JsonRpcError,
+			status: Some(200),
+			body: Some(guardrails::RateLimitRejectionOverrideBody {
+				code: Some(code),
+				message: Some(Arc::new(
+					crate::cel::Expression::new_strict(message).unwrap(),
+				)),
+			}),
+			headers: Vec::new(),
+		}
+	}
+
 	pub fn echo_text(r: &CallToolResult) -> String {
 		r.content
 			.iter()
@@ -3421,9 +3506,359 @@ async fn mcp_guardrails_reject_surfaces_jsonrpc_error_inner_body() {
 	assert_eq!(e.message.as_ref(), "denied by mock mcpGuardrails");
 }
 
-#[test]
-fn mcp_guardrails_denies_tool_by_name() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_denies_tool_by_name_inner_body()) }
-async fn mcp_guardrails_denies_tool_by_name_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_remote_rejection_ignores_overrides() {
+	use protos::ext_mcp::authorization_error::Code;
+	use protos::ext_mcp::{AuthorizationError, McpRequestResult, mcp_request_result};
+
+	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
+
+	let extmcp_mock = closure_mock(
+		|_| {
+			Ok(McpRequestResult {
+				result: Some(mcp_request_result::Result::Error(AuthorizationError {
+					code: Code::ResourceExhausted as i32,
+					reason: "quota exhausted".to_string(),
+					mcp_error: Some(
+						serde_json::to_vec(&serde_json::json!({
+							"headers": { "Retry-After": "9" }
+						}))
+						.unwrap()
+						.into(),
+					),
+				})),
+				header_mutation: None,
+				metadata: None,
+			})
+		},
+		|_| pass_response(),
+	)
+	.spawn()
+	.await;
+
+	let policy = guardrails_test_support::policy_with_overrides(
+		extmcp_mock.address,
+		vec![guardrails_test_support::rejection_override(
+			"true",
+			-32042,
+			r#""remote denied""#,
+		)],
+	);
+	let mock = mock_streamable_http_server(true).await;
+	let (_bind, io) = setup_proxy_policies(&mock, true, false, vec![policy]).await;
+	let client = mcp_streamable_client(io).await;
+
+	let err = client
+		.call_tool(
+			rmcp::model::CallToolRequestParams::new("echo").with_arguments(serde_json::Map::new()),
+		)
+		.await
+		.expect_err("tool call should be denied by mcpGuardrails");
+	let rmcp::ServiceError::McpError(e) = &err else {
+		panic!("expected McpError, got {err:?}");
+	};
+	assert_eq!(e.code.0, -32003);
+	assert_eq!(e.message.as_ref(), "quota exhausted");
+}
+
+#[tokio::test]
+async fn mcp_guardrails_invalid_mcp_error_falls_back_to_default_error() {
+	use protos::ext_mcp::authorization_error::Code;
+	use protos::ext_mcp::{AuthorizationError, McpRequestResult, mcp_request_result};
+
+	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
+
+	let extmcp_mock = closure_mock(
+		|_| {
+			Ok(McpRequestResult {
+				result: Some(mcp_request_result::Result::Error(AuthorizationError {
+					code: Code::ResourceExhausted as i32,
+					reason: "invalid mcp_error payload".to_string(),
+					mcp_error: Some(bytes::Bytes::from_static(b"{not-json")),
+				})),
+				header_mutation: None,
+				metadata: None,
+			})
+		},
+		|_| pass_response(),
+	)
+	.spawn()
+	.await;
+
+	let policy = guardrails_test_support::policy(extmcp_mock.address);
+	let mock = mock_streamable_http_server(true).await;
+	let (_bind, io) = setup_proxy_policies(&mock, true, false, vec![policy]).await;
+	let client = mcp_streamable_client(io).await;
+
+	let err = client
+		.call_tool(
+			rmcp::model::CallToolRequestParams::new("echo").with_arguments(serde_json::Map::new()),
+		)
+		.await
+		.expect_err("tool call should be denied by mcpGuardrails");
+	let rmcp::ServiceError::McpError(e) = &err else {
+		panic!("expected McpError, got {err:?}");
+	};
+	assert_eq!(e.code.0, -32003, "ResourceExhausted should map to -32003");
+	assert_eq!(e.message.as_ref(), "invalid mcp_error payload");
+	assert!(e.data.is_none(), "invalid mcp_error JSON should be ignored");
+}
+
+#[tokio::test]
+async fn mcp_guardrails_native_rate_limit_rejection_override_uses_limit_payload() {
+	use protos::ext_mcp::authorization_error::Code;
+	use protos::ext_mcp::{AuthorizationError, McpRequestResult, mcp_request_result};
+
+	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
+
+	let gtx = closure_mock(
+		|_| {
+			Ok(McpRequestResult {
+				result: Some(mcp_request_result::Result::Error(AuthorizationError {
+					code: Code::ResourceExhausted as i32,
+					reason: "rate limit exceeded".to_string(),
+					mcp_error: Some(
+						serde_json::to_vec(&serde_json::json!({
+							"domain": "mcp_api",
+							"overallCode": "OVER_LIMIT",
+							"limit": {
+								"descriptor": {
+									"entries": [{ "key": "tool", "value": "echo" }]
+								},
+								"code": "OVER_LIMIT",
+								"requestsPerUnit": 3,
+								"unit": "MINUTE",
+								"remaining": 0,
+								"resetSeconds": 43,
+								"retryAfterSeconds": 42
+							}
+						}))
+						.unwrap()
+						.into(),
+					),
+				})),
+				header_mutation: None,
+				metadata: None,
+			})
+		},
+		|_| pass_response(),
+	)
+	.spawn()
+	.await;
+	let policy = guardrails_test_support::rate_limit_policy(
+		gtx.address,
+		vec![guardrails_test_support::rejection_override(
+			"has(guardrail.rateLimit.limit)",
+			-32001,
+			r#""retry after " + string(guardrail.rateLimit.limit.retryAfterSeconds)"#,
+		)],
+	);
+	let mock = mock_streamable_http_server(true).await;
+	let (_bind, io) = setup_proxy_policies(&mock, true, false, vec![policy]).await;
+	let client = mcp_streamable_client(io).await;
+
+	let err = client
+		.call_tool(
+			rmcp::model::CallToolRequestParams::new("echo").with_arguments(serde_json::Map::new()),
+		)
+		.await
+		.expect_err("rateLimit should reject before upstream");
+	let rmcp::ServiceError::McpError(e) = &err else {
+		panic!("expected McpError, got {err:?}");
+	};
+	assert_eq!(e.code.0, -32001);
+	assert_eq!(e.message.as_ref(), "retry after 42");
+}
+
+#[tokio::test]
+async fn mcp_guardrails_native_rate_limit_increment_runs_after_success() {
+	use tokio::sync::mpsc;
+	use tokio::time::{Duration, timeout};
+
+	let (tx, mut rx) = mpsc::unbounded_channel();
+	let gtx = crate::test_helpers::extmcpmock::closure_mock(
+		{
+			let tx = tx.clone();
+			move |req| {
+				tx.send((
+					"request",
+					serde_json::to_value(req.metadata_context.as_ref()).unwrap(),
+				))
+				.unwrap();
+				crate::test_helpers::extmcpmock::pass_request()
+			}
+		},
+		move |resp| {
+			tx.send((
+				"response",
+				serde_json::to_value(resp.metadata_context.as_ref()).unwrap(),
+			))
+			.unwrap();
+			crate::test_helpers::extmcpmock::pass_response()
+		},
+	)
+	.spawn()
+	.await;
+	let policy = guardrails_test_support::rate_limit_policy_with_entry(
+		gtx.address,
+		"method",
+		"mcp.methodName",
+		Vec::new(),
+	);
+	let mock = mock_streamable_http_server(true).await;
+	let (_bind, io) = setup_proxy_policies(&mock, true, false, vec![policy]).await;
+	let client = mcp_streamable_client(io).await;
+
+	client
+		.call_tool(
+			rmcp::model::CallToolRequestParams::new("echo").with_arguments(serde_json::Map::new()),
+		)
+		.await
+		.expect("tool call should pass");
+
+	let peek = timeout(Duration::from_secs(5), rx.recv())
+		.await
+		.expect("peek request should be sent")
+		.expect("peek request present");
+	let increment = timeout(Duration::from_secs(5), rx.recv())
+		.await
+		.expect("async increment request should be sent")
+		.expect("increment request present");
+	assert_eq!(peek.0, "request");
+	assert_eq!(increment.0, "response");
+	assert_eq!(peek.1["descriptors"][0]["hitsAddend"].as_f64(), Some(0.0));
+	assert_eq!(
+		increment.1["descriptors"][0]["hitsAddend"].as_f64(),
+		Some(1.0)
+	);
+}
+
+#[tokio::test]
+async fn mcp_guardrails_native_rate_limit_non_peek_increments_on_request_only() {
+	use tokio::sync::mpsc;
+	use tokio::time::{Duration, timeout};
+
+	let (tx, mut rx) = mpsc::unbounded_channel();
+	let gtx = crate::test_helpers::extmcpmock::closure_mock(
+		{
+			let tx = tx.clone();
+			move |req| {
+				tx.send((
+					"request",
+					serde_json::to_value(req.metadata_context.as_ref()).unwrap(),
+				))
+				.unwrap();
+				crate::test_helpers::extmcpmock::pass_request()
+			}
+		},
+		move |resp| {
+			tx.send((
+				"response",
+				serde_json::to_value(resp.metadata_context.as_ref()).unwrap(),
+			))
+			.unwrap();
+			crate::test_helpers::extmcpmock::pass_response()
+		},
+	)
+	.spawn()
+	.await;
+	let policy = guardrails_test_support::rate_limit_policy_with_entry_and_peek(
+		gtx.address,
+		"method",
+		"mcp.methodName",
+		false,
+		Vec::new(),
+	);
+	let mock = mock_streamable_http_server(true).await;
+	let (_bind, io) = setup_proxy_policies(&mock, true, false, vec![policy]).await;
+	let client = mcp_streamable_client(io).await;
+
+	client
+		.call_tool(
+			rmcp::model::CallToolRequestParams::new("echo").with_arguments(serde_json::Map::new()),
+		)
+		.await
+		.expect("tool call should pass");
+
+	let increment = timeout(Duration::from_secs(5), rx.recv())
+		.await
+		.expect("request increment should be sent")
+		.expect("request increment present");
+	assert_eq!(increment.0, "request");
+	assert_eq!(
+		increment.1["descriptors"][0]["hitsAddend"].as_f64(),
+		Some(1.0)
+	);
+	assert!(
+		timeout(Duration::from_millis(200), rx.recv())
+			.await
+			.is_err(),
+		"non-peek descriptors must not trigger a second GTX call"
+	);
+}
+
+#[tokio::test]
+async fn mcp_guardrails_native_rate_limit_skips_increment_on_jsonrpc_error() {
+	use tokio::sync::mpsc;
+	use tokio::time::{Duration, timeout};
+
+	let (tx, mut rx) = mpsc::unbounded_channel();
+	let gtx = crate::test_helpers::extmcpmock::closure_mock(
+		{
+			let tx = tx.clone();
+			move |req| {
+				tx.send((
+					"request",
+					serde_json::to_value(req.metadata_context.as_ref()).unwrap(),
+				))
+				.unwrap();
+				crate::test_helpers::extmcpmock::pass_request()
+			}
+		},
+		move |resp| {
+			tx.send((
+				"response",
+				serde_json::to_value(resp.metadata_context.as_ref()).unwrap(),
+			))
+			.unwrap();
+			crate::test_helpers::extmcpmock::pass_response()
+		},
+	)
+	.spawn()
+	.await;
+	let policy = guardrails_test_support::rate_limit_policy_with_entry(
+		gtx.address,
+		"method",
+		"mcp.methodName",
+		Vec::new(),
+	);
+	let mock = mock_streamable_http_server(true).await;
+	let (_bind, io) = setup_proxy_policies(&mock, true, false, vec![policy]).await;
+	let client = mcp_streamable_client(io).await;
+
+	client
+		.call_tool(
+			rmcp::model::CallToolRequestParams::new("sum").with_arguments(serde_json::Map::new()),
+		)
+		.await
+		.expect_err("upstream should return a JSON-RPC error for invalid params");
+
+	let peek = timeout(Duration::from_secs(5), rx.recv())
+		.await
+		.expect("peek request should be sent")
+		.expect("peek request present");
+	assert_eq!(peek.0, "request");
+	assert_eq!(peek.1["descriptors"][0]["hitsAddend"].as_f64(), Some(0.0));
+	assert!(
+		timeout(Duration::from_millis(200), rx.recv())
+			.await
+			.is_err(),
+		"JSON-RPC errors must not trigger async increment"
+	);
+}
+
+#[tokio::test]
+async fn mcp_guardrails_denies_tool_by_name() {
 	use protos::ext_mcp::authorization_error::Code;
 
 	use crate::test_helpers::extmcpmock::{
@@ -4679,6 +5114,68 @@ async fn flat_resolve_tool_call_uses_tools_list_route_index_inner_body() {
 		.unwrap();
 	assert_eq!(target, "mcp-server-everything");
 	assert_eq!(upstream, "echo");
+}
+
+#[test]
+fn flat_resolve_prompt_call_uses_prompts_list_route_index() {
+	crate::mcp::tests::block_on_big_stack(flat_resolve_prompt_call_uses_prompts_list_route_index_inner_body())
+}
+async fn flat_resolve_prompt_call_uses_prompts_list_route_index_inner_body() {
+	use rmcp::model::{ListPromptsResult, Prompt, ServerResult};
+
+	let federation = crate::mcp::rewrite::McpRewritePolicy::flat_server();
+	// Policy assumes underscore upstream names; npm server-everything uses hyphens.
+	let everything_rewrite =
+		crate::mcp::rewrite::McpRewritePolicy::single_prompt_rename("simple_prompt", "simple-prompt");
+	let rewrite = crate::mcp::rewrite::McpRewriteSet::merge_for_target(
+		Some(&federation),
+		Some(&everything_rewrite),
+	);
+	let relay = Relay::new(
+		McpBackendGroup {
+			targets: vec![fake_target_with_rewrite(
+				"mcp-server-everything",
+				SocketAddr::from(([127, 0, 0, 1], 30322)),
+				rewrite,
+			)],
+			..Default::default()
+		},
+		empty_mcp_policies(),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
+	)
+	.unwrap();
+
+	let cel = crate::mcp::rbac::CelExecWrapper::new(
+		::http::Request::builder()
+			.uri("http://example.com/mcp")
+			.body(())
+			.unwrap(),
+	);
+	let merge = relay.merge_prompts();
+	let _ = merge(
+		vec![(
+			"mcp-server-everything".into(),
+			ServerResult::ListPromptsResult(ListPromptsResult {
+				prompts: vec![Prompt::new("simple-prompt", None::<&str>, None)],
+				next_cursor: None,
+				meta: None,
+			}),
+		)],
+		&cel,
+	)
+	.unwrap();
+
+	let ctx = crate::mcp::upstream::IncomingRequestContext::empty();
+	let (target, upstream) = relay
+		.resolve_prompt_call("simple-prompt", &ctx)
+		.await
+		.unwrap();
+	assert_eq!(target, "mcp-server-everything");
+	// Route index from prompts/list wins over static exposed_to_upstream (simple_prompt).
+	assert_eq!(upstream, "simple-prompt");
 }
 
 /// Regression for the multi-target federation `tools/call` bug

@@ -290,6 +290,29 @@
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`binds[].listeners[].routes[].policies.authorization`|object|Authorization rules for incoming HTTP requests.|
 |`binds[].listeners[].routes[].policies.authorization.rules`|[]object|CEL authorization rules to evaluate for a request.|
@@ -2333,6 +2356,29 @@
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`binds[].listeners[].routes[].backends[].mcp.statefulMode`|enum|Possible values: `stateless`, `stateful`.|
 |`binds[].listeners[].routes[].backends[].mcp.prefixMode`|enum|Possible values: `always`, `conditional`, `null`.|
@@ -2745,6 +2791,29 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`binds[].listeners[].routes[].backends[].ai.policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`binds[].listeners[].routes[].backends[].ai.policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -3987,6 +4056,29 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -5199,6 +5291,29 @@
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`binds[].listeners[].routes[].backends[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`binds[].listeners[].routes[].backends[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -7275,6 +7390,29 @@
 |`policies[].policy.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`policies[].policy.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`policies[].policy.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`policies[].policy.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`policies[].policy.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`policies[].policy.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`policies[].policy.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`policies[].policy.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`policies[].policy.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`policies[].policy.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`policies[].policy.authorization`|object|Authorization rules for incoming HTTP requests.|
 |`policies[].policy.authorization.rules`|[]object|CEL authorization rules to evaluate for a request.|
@@ -9315,6 +9453,29 @@
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`backends[].mcp.statefulMode`|enum|Possible values: `stateless`, `stateful`.|
 |`backends[].mcp.prefixMode`|enum|Possible values: `always`, `conditional`, `null`.|
@@ -9727,6 +9888,29 @@
 |`backends[].ai.policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`backends[].ai.policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`backends[].ai.policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`backends[].ai.policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`backends[].ai.policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`backends[].ai.policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`backends[].ai.policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`backends[].ai.policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`backends[].ai.policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -10969,6 +11153,29 @@
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`backends[].ai.groups[].providers[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`backends[].ai.groups[].providers[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -12179,6 +12386,29 @@
 |`backends[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`backends[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`backends[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`backends[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`backends[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`backends[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`backends[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`backends[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`backends[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`backends[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`backends[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`backends[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -13208,6 +13438,29 @@
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`routeGroups[].routes[].policies.authorization`|object|Authorization rules for incoming HTTP requests.|
 |`routeGroups[].routes[].policies.authorization.rules`|[]object|CEL authorization rules to evaluate for a request.|
@@ -15251,6 +15504,29 @@
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`routeGroups[].routes[].backends[].mcp.statefulMode`|enum|Possible values: `stateless`, `stateful`.|
 |`routeGroups[].routes[].backends[].mcp.prefixMode`|enum|Possible values: `always`, `conditional`, `null`.|
@@ -15663,6 +15939,29 @@
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`routeGroups[].routes[].backends[].ai.policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`routeGroups[].routes[].backends[].ai.policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -16905,6 +17204,29 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -18117,6 +18439,29 @@
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`routeGroups[].routes[].backends[].policies.a2a`|object|Mark this traffic as A2A to enable A2A processing and telemetry.|
 |`routeGroups[].routes[].backends[].policies.inferenceRouting`|object|Route requests through an endpoint picker before forwarding to this backend.|
@@ -21847,6 +22192,29 @@
 |`mcp.targets[].policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`mcp.targets[].policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`mcp.targets[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`mcp.targets[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`mcp.statefulMode`|enum|Possible values: `stateless`, `stateful`.|
 |`mcp.prefixMode`|enum|Possible values: `always`, `conditional`, `null`.|
@@ -22024,6 +22392,29 @@
 |`mcp.policies.mcpGuardrails.processors[].requestHeaders.allowed`|[]string||
 |`mcp.policies.mcpGuardrails.processors[].requestHeaders.disallowed`|[]string||
 |`mcp.policies.mcpGuardrails.processors[].kind`|enum|Possible values: `remote`.|
+|`mcp.policies.mcpGuardrails.processors[].domain`|string|Rate-limit domain sent to the platform RLS service.|
+|`mcp.policies.mcpGuardrails.processors[].policies`|object|Policies used when connecting to the platform RLS backend.|
+|`mcp.policies.mcpGuardrails.processors[].descriptors`|[]object|Rate-limit descriptors evaluated from request and MCP context.|
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].entries`|[]object||
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].entries[].key`|string||
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].entries[].name`|string||
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].entries[].expression`|string||
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].entries[].value`|string||
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].type`|enum|Possible values: `requests`, `tokens`.|
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].unit`|enum|Possible values: `requests`, `tokens`.|
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
+|`mcp.policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
+|`mcp.policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].body.message`|string||
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].headers`|[]object||
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].name`|string||
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].headers[].value`|string||
+|`mcp.policies.mcpGuardrails.processors[].kind`|enum|Possible values: `rateLimit`.|
 |`mcp.policies.mcpGuardrails.processors[].methods`|object|Allowlist: only methods listed here run through this processor, at the<br>configured phase. Keys may be exact (`tools/call`), prefix (`tools/*`),<br>or suffix (`*/list`) wildcards, or `*` for all methods. Methods matching<br>no key bypass this processor; see [`phase::resolve`] for match precedence.|
 |`mcp.policies.authorization`|object|Authorization rules for incoming HTTP requests.|
 |`mcp.policies.authorization.rules`|[]object|CEL authorization rules to evaluate for a request.|

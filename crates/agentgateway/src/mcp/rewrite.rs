@@ -241,12 +241,31 @@ impl McpRewriteSet {
 	}
 
 	/// Resolve a Flat-mode client prompt name to `(target, upstream)`.
+	///
+	/// When `routes` is populated (after a federated `prompts/list`), use the same
+	/// exposed-name → `(target, upstream)` mapping as the merged catalog. Otherwise
+	/// fall back to rewrite reverse-map and pass-through on targets without per-target
+	/// rewrite rules.
 	pub fn resolve_flat_prompt(
 		&self,
 		exposed: &str,
+		routes: Option<&HashMap<String, (String, String)>>,
+		all_targets: &[String],
 	) -> Result<(String, String), crate::mcp::upstream::UpstreamError> {
+		use crate::mcp::upstream::UpstreamError;
+
+		if let Some(routes) = routes {
+			if let Some(route) = routes.get(exposed) {
+				return Ok(route.clone());
+			}
+		}
+
 		let mut hits = Vec::new();
-		for (target, rw) in &self.per_target {
+		for target in all_targets {
+			let Some(rw) = self.per_target.get(target) else {
+				hits.push((target.clone(), exposed.to_string()));
+				continue;
+			};
 			if let Some(upstream) = rw.exposed_to_upstream.get(exposed) {
 				hits.push((target.clone(), upstream.clone()));
 				continue;
@@ -260,11 +279,11 @@ impl McpRewriteSet {
 			}
 		}
 		match hits.len() {
-			0 => Err(crate::mcp::upstream::UpstreamError::InvalidRequest(format!(
+			0 => Err(UpstreamError::InvalidRequest(format!(
 				"unknown flat prompt name: {exposed}"
 			))),
 			1 => Ok(hits.pop().unwrap()),
-			_ => Err(crate::mcp::upstream::UpstreamError::InvalidRequest(format!(
+			_ => Err(UpstreamError::InvalidRequest(format!(
 				"ambiguous flat prompt name: {exposed}"
 			))),
 		}
@@ -548,6 +567,17 @@ pub fn build_flat_tool_route_index(
 	build_flat_route_index(entries, "tool name")
 }
 
+/// Build exposed prompt name → `(target, upstream)` using first-wins on collision.
+///
+/// Matches [`filter_flat_prompt_collisions`]: when the same bare prompt name appears on
+/// multiple federation targets, the first target's mapping stays so `prompts/get` can
+/// route what the client saw in `prompts/list`.
+pub fn build_flat_prompt_route_index(
+	entries: impl IntoIterator<Item = (String, String, String)>,
+) -> HashMap<String, (String, String)> {
+	build_flat_route_index(entries, "prompt name")
+}
+
 /// Build exposed task id → `(target, upstream_task_id)` using first-wins on collision.
 ///
 /// Matches [`filter_flat_task_collisions`]: when the same bare task id appears on
@@ -755,6 +785,21 @@ impl McpRewritePolicy {
 	pub(crate) fn single_tool_rename(upstream: &str, exposed: &str) -> Self {
 		Self {
 			tools: vec![CompiledItemRule {
+				rule_name: "rename".into(),
+				matcher: ItemMatcher::Exact(upstream.to_string()),
+				rewrite: RewriteValue {
+					name: Some(exposed.to_string()),
+					..Default::default()
+				},
+			}],
+			..Default::default()
+		}
+	}
+
+	#[cfg(test)]
+	pub(crate) fn single_prompt_rename(upstream: &str, exposed: &str) -> Self {
+		Self {
+			prompts: vec![CompiledItemRule {
 				rule_name: "rename".into(),
 				matcher: ItemMatcher::Exact(upstream.to_string()),
 				rewrite: RewriteValue {

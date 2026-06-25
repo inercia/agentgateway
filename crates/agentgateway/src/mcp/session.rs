@@ -126,7 +126,7 @@ impl Session {
 							self.relay.resolve_tool_call(name.as_str(), &ctx).await
 						},
 						Some(ClientRequest::GetPromptRequest(_)) => {
-							self.relay.resolve_prompt_call(name.as_str())
+							self.relay.resolve_prompt_call(name.as_str(), &ctx).await
 						},
 						_ => unreachable!("match arm guarantees single-target request type"),
 					};
@@ -183,15 +183,16 @@ impl Session {
 		self
 	}
 
-	fn authorize_prompt_request(
+	async fn authorize_prompt_request(
 		&self,
 		name: &str,
 		method: &str,
+		ctx: &IncomingRequestContext,
 		span: &mut SpanWriteOnDrop,
 		log: &AsyncLog<mcp::MCPInfo>,
 		cel: &rbac::CelExecWrapper,
 	) -> Result<(String, String), UpstreamError> {
-		let (service_name, upstream_prompt) = self.relay.resolve_prompt_call(name)?;
+		let (service_name, upstream_prompt) = self.relay.resolve_prompt_call(name, ctx).await?;
 		span.rename_span(format!("{method} {service_name}"));
 		log.non_atomic_mutate(|l| {
 			l.set_prompt(service_name.clone(), upstream_prompt.clone());
@@ -315,11 +316,9 @@ impl Session {
 		let uri = rrr.params.uri.clone();
 		let (target_name, original_uri) =
 			self.authorize_federated_resource_uri(&uri, method, span, log, cel)?;
+		// Set upstream URI before guardrails so mcp.resource.uri in CEL sees the canonical
+		// upstream URI, consistent with how tool/prompt names are handled.
 		rrr.params.uri = original_uri;
-		// Decision 2: ExtMCP request guardrails must also run on the federated resource-read
-		// path (not just upstream's single-target path). The federated URI is already parsed
-		// and authorized above; run the request-phase guardrails hook against the resolved
-		// upstream target before forwarding.
 		self
 			.relay
 			.maybe_run_guardrails_call_request(
@@ -700,10 +699,9 @@ impl Session {
 							l.set_tool(service_name.clone(), upstream_tool.clone());
 							l.capture_call_arguments(call_arguments);
 						});
+						// Set upstream name before guardrails so CEL (e.g. mcp.tool.name in rate-limit
+						// descriptors) sees the canonical upstream name, consistent with RBAC rules.
 						ctr.params.name = upstream_tool.clone().into();
-
-						// Guardrails (decision 2) run for every build before the upstream call; the
-						// adobe build additionally applies federated MCP-Apps result rewriting.
 						self
 							.authorize_with_ctx(
 								service_name.as_str(),
@@ -718,6 +716,9 @@ impl Session {
 								&name,
 							)
 							.await?;
+						// Re-apply after authorize in case a remote guardrail returned Mutated params.
+						ctr.params.name = upstream_tool.into();
+
 						#[cfg(feature = "adobe")]
 						{
 							let default_mux = self.relay.default_target_name();
@@ -750,27 +751,32 @@ impl Session {
 					},
 					ClientRequest::GetPromptRequest(gpr) => {
 						let name = gpr.params.name.clone();
-						let (service_name, prompt) = self.relay.parse_resource_name(&name)?;
+						let (service_name, upstream_prompt) =
+							self.relay.resolve_prompt_call(name.as_str(), &ctx).await?;
 						span.rename_span(format!("{method} {service_name}"));
 						log.non_atomic_mutate(|l| {
-							l.set_prompt(service_name.to_string(), prompt.to_string());
+							l.set_prompt(service_name.clone(), upstream_prompt.clone());
 						});
-						gpr.params.name = prompt.to_string();
+						// Set upstream name before guardrails so CEL (e.g. mcp.prompt.name in rate-limit
+						// descriptors) sees the canonical upstream name, consistent with RBAC rules.
+						gpr.params.name = upstream_prompt.clone();
 						self
 							.authorize_with_ctx(
-								service_name,
+								service_name.as_str(),
 								mcp::guardrails::methods::PROMPTS_GET,
 								&mut gpr.params,
 								&mut ctx,
 								rbac::ResourceType::Prompt(rbac::ResourceId::new(
 									service_name.to_string(),
-									prompt.to_string(),
+									upstream_prompt.clone(),
 								)),
 								"prompt",
 								&name,
 							)
 							.await?;
-						self.relay.send_single(r, ctx, service_name, None).await
+						// Re-apply after authorize in case a remote guardrail returned Mutated params.
+						gpr.params.name = upstream_prompt;
+						self.relay.send_single(r, ctx, service_name.as_str(), None).await
 					},
 					ClientRequest::ReadResourceRequest(_) => {
 						self
@@ -892,8 +898,9 @@ impl Session {
 					ClientRequest::CompleteRequest(cr) => match &cr.params.r#ref {
 						Reference::Prompt(prompt) => {
 							let name = prompt.name.clone();
-							let (service_name, prompt_name) =
-								self.authorize_prompt_request(&name, &method, &mut span, &log, &cel)?;
+							let (service_name, prompt_name) = self
+								.authorize_prompt_request(&name, &method, &ctx, &mut span, &log, &cel)
+								.await?;
 							cr.params.r#ref = Reference::for_prompt(prompt_name.to_string());
 							self.relay.send_single(r, ctx, service_name.as_str(), None).await
 						},

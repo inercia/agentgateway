@@ -317,7 +317,7 @@ impl ProxyError {
 			ProxyError::MCP(mcp::Error::SendError(_, _)) => StatusCode::INTERNAL_SERVER_ERROR,
 			// Note: we do not return a 401/403 here, as the obscure that it was rejected due to auth
 			ProxyError::MCP(mcp::Error::Authorization(_, _, _)) => StatusCode::BAD_REQUEST,
-			ProxyError::MCP(mcp::Error::McpGuardrails(_, _)) => StatusCode::BAD_REQUEST,
+			ProxyError::MCP(mcp::Error::McpGuardrails(_, _)) => StatusCode::OK,
 		};
 		let grpc_status = is_grpc_request.then(|| proxy_error_to_grpc_status(&self, code));
 		let mut rb = ::http::Response::builder().status(code);
@@ -415,16 +415,26 @@ impl ProxyError {
 				.unwrap();
 		}
 		if let ProxyError::MCP(mcp::Error::McpGuardrails(req_id, rej)) = self {
-			let msg = serde_json::to_string(&JsonRpcError {
-				jsonrpc: Default::default(),
-				id: req_id.clone(),
-				error: rej.clone(),
-			})
-			.unwrap_or_default();
-			return rb
-				.header("content-type", "application/json")
-				.body(http::Body::from(msg))
-				.unwrap();
+			let status = rej
+				.http_status
+				.and_then(|s| StatusCode::from_u16(s).ok())
+				.unwrap_or(StatusCode::OK);
+			let response_headers = rej
+				.http_headers
+				.iter()
+				.filter_map(|(name, value)| {
+					let name = hyper::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
+					let value = HeaderValue::from_str(value).ok()?;
+					Some((name, value))
+				})
+				.collect::<Vec<_>>();
+			let msg = serde_json::to_string(&rej.to_server_json_rpc_message(req_id.clone()))
+				.unwrap_or_default();
+			rb = rb.status(status).header("content-type", "application/json");
+			for (name, value) in response_headers {
+				rb = rb.header(name, value);
+			}
+			return rb.body(http::Body::from(msg)).unwrap();
 		}
 
 		rb.header(hyper::header::CONTENT_TYPE, "text/plain")
@@ -586,6 +596,72 @@ mod tests {
 			"text/plain"
 		);
 		assert!(response.headers().get("grpc-status").is_none());
+	}
+
+	#[test]
+	fn mcp_guardrails_error_defaults_to_http_200_json_rpc_error() {
+		use crate::mcp::guardrails::Rejection;
+		use rmcp::model::{ErrorCode, ErrorData};
+
+		let err = ProxyError::MCP(crate::mcp::Error::McpGuardrails(
+			rmcp::model::RequestId::Number(1),
+			Rejection::from(ErrorData::new(ErrorCode(-32003), "rate limit exceeded", None)),
+		));
+
+		let response = err.into_response_with_grpc(false);
+
+		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(
+			response.headers().get(hyper::header::CONTENT_TYPE).unwrap(),
+			"application/json"
+		);
+	}
+
+	#[test]
+	fn mcp_guardrails_error_applies_response_header_overrides() {
+		use crate::mcp::guardrails::Rejection;
+
+		let err = ProxyError::MCP(crate::mcp::Error::McpGuardrails(
+			rmcp::model::RequestId::Number(7),
+			Rejection {
+				envelope: crate::mcp::guardrails::McpDenialEnvelope::JsonRpc(ErrorData::new(
+					ErrorCode(-32003),
+					"rate limit exceeded",
+					None,
+				)),
+				http_status: Some(401),
+				http_headers: vec![("WWW-Authenticate".to_string(), "Bearer error=\"rate_limited\"".to_string())],
+			},
+		));
+
+		let response = err.into_response_with_grpc(false);
+
+		assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+		assert_eq!(
+			response.headers().get("WWW-Authenticate").unwrap(),
+			"Bearer error=\"rate_limited\""
+		);
+	}
+
+	#[test]
+	fn mcp_guardrails_tool_result_serializes_result_not_error() {
+		use crate::mcp::guardrails::{McpDenialEnvelope, Rejection};
+
+		let rej = Rejection {
+			envelope: McpDenialEnvelope::ToolResult {
+				message: "quota exceeded".to_string(),
+			},
+			http_status: None,
+			http_headers: Vec::new(),
+		};
+		let msg = serde_json::to_string(
+			&rej.to_server_json_rpc_message(rmcp::model::RequestId::Number(9)),
+		)
+		.unwrap();
+		let json: serde_json::Value = serde_json::from_str(&msg).unwrap();
+		assert!(json.get("error").is_none());
+		assert_eq!(json["result"]["isError"], true);
+		assert_eq!(json["result"]["content"][0]["text"], "quota exceeded");
 	}
 
 	#[test]

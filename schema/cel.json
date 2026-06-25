@@ -933,6 +933,13 @@
               "default": ""
             }
           }
+        },
+        "isError": {
+          "description": "Outcome signal for increment gating (`mcp.isError` in CEL). Set on the\nresponse/increment path when the terminal MCP result is known.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },

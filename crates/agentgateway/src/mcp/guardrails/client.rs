@@ -80,7 +80,7 @@ pub(crate) async fn check_request<P: serde::de::DeserializeOwned>(
 			},
 		},
 		Some(mcp_request_result::Result::Error(e)) => {
-			Outcome::Reject(translate_error(method, backends, e))
+			Outcome::Reject(translate_error(method, backends, e).into())
 		},
 		None => on_protocol_violation(remote, method, backends, "missing result oneof"),
 	}
@@ -208,7 +208,7 @@ pub(crate) async fn check_response(
 			}
 		},
 		Some(mcp_response_result::Result::Error(e)) => {
-			Outcome::Reject(translate_error(method, backends, e))
+			Outcome::Reject(translate_error(method, backends, e).into())
 		},
 		None => on_protocol_violation(remote, method, backends, "missing result oneof"),
 	}
@@ -284,7 +284,7 @@ fn collect_headers(filter: &HeaderFilter, req: &crate::http::Request) -> Vec<wir
 const PERMISSION_DENIED: ErrorCode = ErrorCode(-32001);
 const RESOURCE_EXHAUSTED: ErrorCode = ErrorCode(-32003);
 
-fn translate_error(method: &str, backends: &[String], e: AuthorizationError) -> ErrorData {
+pub(crate) fn translate_error(method: &str, backends: &[String], e: AuthorizationError) -> ErrorData {
 	use wire::authorization_error::Code as C;
 	let code = match C::try_from(e.code).unwrap_or(C::Unknown) {
 		C::PermissionDenied => PERMISSION_DENIED,
@@ -316,7 +316,7 @@ fn on_grpc_error<T>(
 			ErrorCode::INTERNAL_ERROR,
 			format!("mcpGuardrails {rpc} failed: {}", status.message()),
 			None,
-		)),
+		).into()),
 	}
 }
 
@@ -338,7 +338,7 @@ fn on_protocol_violation<T>(
 			ErrorCode::INTERNAL_ERROR,
 			format!("mcpGuardrails protocol violation: {reason}"),
 			None,
-		)),
+		).into()),
 	}
 }
 
