@@ -17,3 +17,7 @@ rustflags = [
 [env]
 CXXFLAGS = "-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer"
 CFLAGS = "-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer"
+# Proxy request-handling futures are huge in debug builds; the default ~2 MiB
+# per-test thread stack overflows for MCP/gateway integration tests. cargo sets
+# this for every test run so no manual `RUST_MIN_STACK=...` prefix is needed.
+RUST_MIN_STACK = "8388608"

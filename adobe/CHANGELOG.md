@@ -55,14 +55,6 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 - Build: architecture suffix in `adobe/Makefile` now extracted from the `PLATFORM` variable instead of being hard-coded, fixing cross-arch snapshot builds.
 - Dev: local environment setup docs moved to a separate file (`.devcontainer` workflow); minor fork-friendliness refactors.
 
-## 1.2.4
-
-- **MCP usage rate limiting (`mcpGuardrails` native `rateLimit` processor):** enforce per-method limits via ExtMCP against GTS — request-phase peek/check, response-phase increment for `peek` descriptors, with `failOpen` / `failClosed` when the rate-limit service is unavailable (`#[cfg(feature = "adobe")]`).
-- **Descriptor model:** CEL-evaluated descriptor entries, per-descriptor `limitOverride`, optional `peek` (check without charging on the request; charge on successful response).
-- **Denial shaping:** `rejectionOverrides` on the rate-limit processor reshape over-limit responses as JSON-RPC errors or `tools/call` `ToolResult` denials, with optional HTTP status/headers; CEL context includes `guardrail.rateLimit.*` plus request/MCP/JWT fields.
-- **Federation:** rate-limit guardrails run on federated MCP paths (merged fanout request/response hooks) with client-facing vs upstream-facing MCP metadata preserved for response accounting.
-- **Wire / control plane:** ExtMCP rate-limit metadata on `CheckRequest` / `CheckResponse`; pair with agentlink `AIPolicy` / `AIBackend` MCP guardrails + rate-limit CRDs and GTS ExtMCP rate-limit service.
-
 ## 1.2.3
 
 - **Federated MCP elicitation (and other server-initiated requests):** route client JSON-RPC `Response` / `Error` messages back to the originating upstream instead of rejecting them with `unsupported message type` (HTTP 500).
@@ -72,3 +64,17 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 - **Cancellation teardown:** when the downstream client cancels an in-flight `tools/call`, abort the held upstream POST SSE stream instead of keeping it open until the upstream times out.
 - **Progress passthrough:** relay genuine upstream `notifications/progress` on `tools/call` streams unchanged (no synthetic keep-alive).
 - **Operator note (elicitation timeouts):** interactive elicitation is bounded by the MCP client's request timeout (MCP Inspector default **10s**). The gateway respects that budget; raise the Inspector **Request Timeout** and **Max Total Timeout** for human-in-the-loop flows. Long-running interactive work should use the experimental Tasks flow (SEP-1686) rather than holding a single `tools/call` open indefinitely.
+- **Prometheus counter `agentgateway_mcp_upstream_errors_total{server, method, error_type, route}`:** counts genuine upstream/transport failures of single-target MCP `tools/call` dispatches, by individual federated `server`, request `method`, and a bounded `error_type` (the transport `UpstreamError` variants; `Http` split into `http_4xx`/`http_5xx`/`http_other`). RBAC denials, client/protocol errors (`Authorization`, `InvalidRequest`, `InvalidMethod*`), and fan-out failures are not counted. Exposed on the existing `/metrics` endpoint at the same finalize site as the Story 1 histogram (`#[cfg(feature = "adobe")]`).
+
+## 1.2.4
+
+- **MCP usage rate limiting (`mcpGuardrails` native `rateLimit` processor):** enforce per-method limits via ExtMCP against GTS — request-phase peek/check, response-phase increment for `peek` descriptors, with `failOpen` / `failClosed` when the rate-limit service is unavailable (`#[cfg(feature = "adobe")]`).
+- **Descriptor model:** CEL-evaluated descriptor entries, per-descriptor `limitOverride`, optional `peek` (check without charging on the request; charge on successful response).
+- **Denial shaping:** `rejectionOverrides` on the rate-limit processor reshape over-limit responses as JSON-RPC errors or `tools/call` `ToolResult` denials, with optional HTTP status/headers; CEL context includes `guardrail.rateLimit.*` plus request/MCP/JWT fields.
+- **Federation:** rate-limit guardrails run on federated MCP paths (merged fanout request/response hooks) with client-facing vs upstream-facing MCP metadata preserved for response accounting.
+- **Wire / control plane:** ExtMCP rate-limit metadata on `CheckRequest` / `CheckResponse`; pair with agentlink `AIPolicy` / `AIBackend` MCP guardrails + rate-limit CRDs and GTS ExtMCP rate-limit service.
+
+## 1.2.5
+
+- **`agentgateway_mcp_upstream_errors_total`** (Adobe-only): `server` now carries the AIBackend name; new `target` label carries the individual MCP target name.
+- **`agentgateway_mcp_request_duration_seconds`** (Adobe-only): `server` now carries the AIBackend name; new `target` label carries the individual MCP target name.

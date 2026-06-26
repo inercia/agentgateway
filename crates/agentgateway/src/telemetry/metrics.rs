@@ -133,6 +133,34 @@ pub struct MCPCall {
 	pub custom: CustomField,
 }
 
+#[cfg(feature = "adobe")]
+#[derive(Clone, Hash, Debug, PartialEq, Eq, EncodeLabelSet)]
+pub struct MCPCallAdobe {
+	pub server: DefaultedUnknown<RichStrng>,
+	pub target: DefaultedUnknown<RichStrng>,
+	pub method: DefaultedUnknown<RichStrng>,
+	pub resource_type: DefaultedUnknown<MCPOperation>,
+	pub resource: DefaultedUnknown<RichStrng>,
+
+	#[prometheus(flatten)]
+	pub route: RouteIdentifier,
+
+	#[prometheus(flatten)]
+	pub custom: CustomField,
+}
+
+#[cfg(feature = "adobe")]
+#[derive(Clone, Hash, Debug, PartialEq, Eq, EncodeLabelSet)]
+pub struct MCPUpstreamError {
+	pub server: DefaultedUnknown<RichStrng>,
+	pub target: DefaultedUnknown<RichStrng>,
+	pub method: DefaultedUnknown<RichStrng>,
+	pub error_type: DefaultedUnknown<RichStrng>,
+
+	#[prometheus(flatten)]
+	pub route: RouteIdentifier,
+}
+
 #[derive(Clone, Hash, Debug, PartialEq, Eq, EncodeLabelSet)]
 pub struct TCPLabels {
 	pub bind: DefaultedUnknown<RichStrng>,
@@ -226,7 +254,10 @@ pub struct Metrics {
 	pub retries: Counter,
 
 	#[cfg(feature = "adobe")]
-	pub mcp_request_duration: Histogram<MCPCall>,
+	pub mcp_request_duration: Histogram<MCPCallAdobe>,
+
+	#[cfg(feature = "adobe")]
+	pub mcp_upstream_errors: Family<MCPUpstreamError, counter::Counter>,
 }
 
 // FilteredRegistry is a wrapper around Registry that allows to filter out certain metrics.
@@ -354,7 +385,7 @@ impl Metrics {
 
 		#[cfg(feature = "adobe")]
 		let mcp_request_duration = {
-			let m = Family::<MCPCall, _>::new_with_constructor(move || {
+			let m = Family::<MCPCallAdobe, _>::new_with_constructor(move || {
 				PromHistogram::new(HTTP_REQUEST_DURATION_BUCKET)
 			});
 			registry.register_with_unit(
@@ -404,6 +435,13 @@ impl Metrics {
 
 			#[cfg(feature = "adobe")]
 			mcp_request_duration,
+
+			#[cfg(feature = "adobe")]
+			mcp_upstream_errors: build(
+				&mut registry,
+				"mcp_upstream_errors",
+				"Total number of MCP upstream/transport errors",
+			),
 
 			gen_ai_token_usage,
 			gen_ai_cost,
@@ -590,17 +628,51 @@ const FIRST_TOKEN_BUCKET: [f64; 16] = [
 pub(crate) mod adobe_metrics {
 	use std::time::Duration;
 
-	use super::{MCPCall, Metrics};
+	use super::{MCPCallAdobe, Metrics};
 
 	/// Records the duration of an MCP call into the Adobe-only histogram.
-	/// Must be called with the same MCPCall key used to increment
-	/// `mcp_requests` to preserve count/sum parity (I6 guards this invariant).
+	/// Increments the Adobe-only `mcp_request_duration` histogram. Aggregate count parity
+	/// with `mcp_requests_total` across all MCPCall series is guarded by the I6 integration test.
 	#[allow(dead_code)]
-	pub fn record_mcp_call(metrics: &Metrics, call: &MCPCall, duration: Duration) {
+	pub fn record_mcp_call(metrics: &Metrics, call: &MCPCallAdobe, duration: Duration) {
 		metrics
 			.mcp_request_duration
 			.get_or_create(call)
 			.observe(duration.as_secs_f64());
+	}
+
+	/// Classifies an [`UpstreamError`] into a bounded `error_type` label for the
+	/// `mcp_upstream_errors_total` counter. Returns `None` for the non-transport
+	/// variants (RBAC denial + client/protocol errors) which must NOT be counted.
+	///
+	/// The match is exhaustive over `UpstreamError` (no wildcard arm): if a future
+	/// upstream sync adds a variant, this fails to compile until it is classified
+	/// here — a deliberate forcing function. Do not add a `_ =>` arm.
+	pub fn classify_upstream_error(e: &crate::mcp::UpstreamError) -> Option<&'static str> {
+		use crate::mcp::{ClientError, UpstreamError};
+
+		Some(match e {
+			UpstreamError::ServiceError(_) => "service_error",
+			UpstreamError::OpenAPIError(_) => "openapi_error",
+			UpstreamError::Proxy(_) => "proxy",
+			UpstreamError::Stdio(_) => "stdio",
+			UpstreamError::StdioShutdown => "stdio_shutdown",
+			UpstreamError::Send => "send",
+			UpstreamError::Recv => "recv",
+			UpstreamError::Http(ClientError::Status(resp)) => match resp.status().as_u16() {
+				400..=499 => "http_4xx",
+				500..=599 => "http_5xx",
+				_ => "http_other",
+			},
+			// ClientError::General | ClientError::Proxy — no upstream status code available.
+			UpstreamError::Http(_) => "http_other",
+			// Not upstream/transport failures — do not count:
+			UpstreamError::McpGuardrails(_)
+			| UpstreamError::Authorization { .. }
+			| UpstreamError::InvalidRequest(_)
+			| UpstreamError::InvalidMethod(_)
+			| UpstreamError::InvalidMethodWithMultiplexing(_) => return None,
+		})
 	}
 }
 
@@ -611,7 +683,7 @@ mod adobe_tests {
 	use prometheus_client::encoding::text::encode;
 	use prometheus_client::registry::Registry;
 
-	use super::{MCPCall, Metrics, RouteIdentifier};
+	use super::{MCPCallAdobe, Metrics, RouteIdentifier};
 
 	#[test]
 	fn mcp_request_duration_registered_under_adobe_feature() {
@@ -623,10 +695,11 @@ mod adobe_tests {
 		// the # TYPE / # UNIT / # HELP headers appear in the scraped output.
 		metrics
 			.mcp_request_duration
-			.get_or_create(&MCPCall {
+			.get_or_create(&MCPCallAdobe {
+				server: DefaultedUnknown::default(),
+				target: DefaultedUnknown::default(),
 				method: DefaultedUnknown::default(),
 				resource_type: DefaultedUnknown::default(),
-				server: DefaultedUnknown::default(),
 				resource: DefaultedUnknown::default(),
 				route: RouteIdentifier::default(),
 				custom: CustomField::default(),
@@ -647,6 +720,154 @@ mod adobe_tests {
 		assert!(
 			out.contains("# HELP agentgateway_mcp_request_duration_seconds"),
 			"missing HELP line for histogram; got:\n{out}"
+		);
+	}
+
+	#[test]
+	fn mcp_upstream_errors_registered_under_adobe_feature() {
+		use super::MCPUpstreamError;
+
+		let mut registry = Registry::default();
+		let sub = agent_core::metrics::sub_registry(&mut registry);
+		let metrics = Metrics::new(sub, FzHashSet::default());
+
+		// prometheus_client only encodes non-empty families — seed one increment so
+		// the # TYPE / # HELP headers appear in the scraped output.
+		metrics
+			.mcp_upstream_errors
+			.get_or_create(&MCPUpstreamError {
+				server: DefaultedUnknown::default(),
+				target: DefaultedUnknown::default(),
+				method: DefaultedUnknown::default(),
+				error_type: DefaultedUnknown::default(),
+				route: RouteIdentifier::default(),
+			})
+			.inc();
+
+		let mut out = String::new();
+		encode(&mut out, &registry).unwrap();
+
+		assert!(
+			out.contains("# TYPE agentgateway_mcp_upstream_errors counter"),
+			"missing TYPE line for counter; got:\n{out}"
+		);
+		assert!(
+			out.contains("# HELP agentgateway_mcp_upstream_errors"),
+			"missing HELP line for counter; got:\n{out}"
+		);
+		assert!(
+			out
+				.lines()
+				.any(|l| l.starts_with("agentgateway_mcp_upstream_errors_total{")),
+			"missing _total sample line; got:\n{out}"
+		);
+	}
+
+	#[test]
+	fn mcp_call_adobe_has_server_and_target_labels() {
+		use super::MCPCallAdobe;
+
+		let mut registry = Registry::default();
+		let sub = agent_core::metrics::sub_registry(&mut registry);
+		let metrics = Metrics::new(sub, FzHashSet::default());
+
+		// Seed one observation so prometheus_client emits the TYPE/UNIT/HELP headers.
+		metrics
+			.mcp_request_duration
+			.get_or_create(&MCPCallAdobe {
+				server: DefaultedUnknown::default(),
+				target: DefaultedUnknown::default(),
+				method: DefaultedUnknown::default(),
+				resource_type: DefaultedUnknown::default(),
+				resource: DefaultedUnknown::default(),
+				route: RouteIdentifier::default(),
+				custom: CustomField::default(),
+			})
+			.observe(0.001);
+
+		let mut out = String::new();
+		encode(&mut out, &registry).unwrap();
+
+		assert!(
+			out.contains("# TYPE agentgateway_mcp_request_duration_seconds histogram"),
+			"missing TYPE line; got:\n{out}"
+		);
+		// Both new labels must appear in the scraped line.
+		assert!(
+			out.lines().any(|l| l.contains(r#"server=""#) && l.contains(r#"target=""#)),
+			"server= or target= label missing from histogram output; got:\n{out}"
+		);
+	}
+
+	#[test]
+	fn classify_upstream_error_maps_transport_and_skips_non_transport() {
+		use super::adobe_metrics::classify_upstream_error;
+		use crate::mcp::{ClientError, UpstreamError};
+
+		// Non-transport variants must NOT be counted (classifier returns None).
+		assert_eq!(
+			classify_upstream_error(&UpstreamError::Authorization {
+				resource_type: "tool".into(),
+				resource_name: "echo".into(),
+			}),
+			None
+		);
+		assert_eq!(
+			classify_upstream_error(&UpstreamError::InvalidRequest("x".into())),
+			None
+		);
+		assert_eq!(
+			classify_upstream_error(&UpstreamError::InvalidMethod("x".into())),
+			None
+		);
+		assert_eq!(
+			classify_upstream_error(&UpstreamError::InvalidMethodWithMultiplexing("x".into())),
+			None
+		);
+		assert_eq!(
+			classify_upstream_error(&UpstreamError::McpGuardrails(
+				crate::mcp::guardrails::Rejection::json_rpc(rmcp::model::ErrorData {
+					code: rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+					message: "test".into(),
+					data: None,
+				})
+			)),
+			None,
+			"McpGuardrails should not be counted"
+		);
+
+		// Simple transport variants.
+		assert_eq!(classify_upstream_error(&UpstreamError::Send), Some("send"));
+		assert_eq!(classify_upstream_error(&UpstreamError::Recv), Some("recv"));
+		assert_eq!(
+			classify_upstream_error(&UpstreamError::StdioShutdown),
+			Some("stdio_shutdown")
+		);
+
+		// Direct `Proxy(_)` transport failure ⇒ "proxy". This is the outer variant U1
+		// (connection-refused) produces end-to-end; the U1 integration test only asserts
+		// "some nonzero series exists", so the `proxy` mapping is pinned here. The inner
+		// `ProxyError` variant is irrelevant — the classifier matches `Proxy(_)`.
+		assert_eq!(
+			classify_upstream_error(&UpstreamError::Proxy(
+				crate::proxy::ProxyError::UpstreamCallTimeout
+			)),
+			Some("proxy")
+		);
+
+		// HTTP status split.
+		let http_status = |code: u16| {
+			let resp = ::http::Response::builder()
+				.status(code)
+				.body(crate::http::Body::empty())
+				.unwrap();
+			UpstreamError::Http(ClientError::Status(Box::new(resp)))
+		};
+		assert_eq!(classify_upstream_error(&http_status(404)), Some("http_4xx"));
+		assert_eq!(classify_upstream_error(&http_status(502)), Some("http_5xx"));
+		assert_eq!(
+			classify_upstream_error(&http_status(302)),
+			Some("http_other")
 		);
 	}
 }

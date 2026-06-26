@@ -117,11 +117,6 @@ pub fn apply_logging_policy_to_log(log: &mut RequestLog, lp: &frontend::LoggingP
 	if !lp.remove.is_empty() {
 		log.cel.fields.remove = lp.remove.clone();
 	}
-	if let Some(database) = &lp.database
-		&& !database.add.is_empty()
-	{
-		log.cel.database_fields.add = database.add.clone();
-	}
 }
 
 async fn apply_request_policies(
@@ -552,7 +547,6 @@ impl HTTPProxy {
 				self.inputs.cfg.metrics.clone(),
 			),
 			self.inputs.metrics.clone(),
-			self.inputs.model_catalog.clone(),
 			start,
 			tcp.clone(),
 		);
@@ -2887,24 +2881,7 @@ fn finalize_attempt_for_retry(
 		),
 		Err(SnapshottedProxyResponse(_)) => (None, None, None),
 	};
-	let end_time = agent_core::Timestamp::now();
-	// This is an intermediate retry snapshot, so a best-effort clone is fine here.
-	let mut llm_response: Option<crate::cel::LLMContext> =
-		log.llm_response.load_clone().map(|llm_info| {
-			crate::cel::LLMContext::from_llm_info(llm_info, Some(log.model_catalog.as_ref()))
-		});
-	if let Some(llm_response) = llm_response.as_mut() {
-		llm_response.set_token_timing(log.start.as_instant(), end_time.as_instant());
-	}
-	let mcp = log.mcp_status.load_clone();
-	log.finalize_request_handle_for_attempt(
-		end_time,
-		status,
-		retry_after,
-		response_snapshot.as_ref(),
-		llm_response.as_ref(),
-		mcp.as_ref(),
-	);
+	log.finalize_for_retry(status, retry_after, response_snapshot.as_ref());
 }
 
 fn should_retry(
