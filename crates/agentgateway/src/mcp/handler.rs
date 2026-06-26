@@ -853,8 +853,21 @@ impl Relay {
 			)));
 		};
 		let guardrails = self.build_guardrails_ctx(&r, &ctx, vec![service_name.to_string()]);
-		let stream =
-			self.rewrite_outbound_server_messages(service_name, us.generic_stream(r, &ctx).await?);
+		let raw_stream = match us.generic_stream(r, &ctx).await {
+			Ok(s) => s,
+			Err(e) => {
+				// Adobe-only: classify + stash the upstream error_type for
+				// mcp_upstream_errors_total (emitted at the log.rs finalize site).
+				#[cfg(feature = "adobe")]
+				if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e)
+					&& let Some(log) = &mcp_log
+				{
+					log.non_atomic_mutate(|i| i.set_upstream_error(t));
+				}
+				return Err(e);
+			},
+		};
+		let stream = self.rewrite_outbound_server_messages(service_name, raw_stream);
 
 		#[cfg(feature = "adobe")]
 		{
@@ -1079,10 +1092,10 @@ impl Relay {
 	pub fn parse_resource_uri(&self, uri: &str) -> Result<(String, String), UpstreamError> {
 		#[cfg(feature = "adobe")]
 		{
-			return crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(
+			crate::mcp::mcp_apps::routing::parse_resource_uri_mixed(
 				self.upstreams.default_target_name.as_ref(),
 				uri,
-			);
+			)
 		}
 		#[cfg(not(feature = "adobe"))]
 		{
@@ -1111,7 +1124,21 @@ impl Relay {
 		};
 		let id = r.id.clone();
 		let guardrails = self.build_guardrails_ctx(&r, &ctx, vec![service_name.to_string()]);
-		let stream = map_server_messages(us.generic_stream(r, &ctx).await?, map_msg);
+		let stream = match us.generic_stream(r, &ctx).await {
+			Ok(s) => s,
+			Err(e) => {
+				// Adobe-only: classify + stash the upstream error_type for
+				// mcp_upstream_errors_total (emitted at the log.rs finalize site).
+				#[cfg(feature = "adobe")]
+				if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e)
+					&& let Some(log) = &mcp_log
+				{
+					log.non_atomic_mutate(|i| i.set_upstream_error(t));
+				}
+				return Err(e);
+			},
+		};
+		let stream = map_server_messages(stream, map_msg);
 
 		match guardrails {
 			Some(guardrails) => {
@@ -1141,11 +1168,18 @@ impl Relay {
 		};
 		let id = r.id.clone();
 		let guardrails = self.build_guardrails_ctx(&r, &ctx, vec![service_name.to_string()]);
-		let stream = us.generic_stream(r, &ctx).await?.register_cancellable(
-			in_flight,
-			id.clone(),
-			service_name.to_string(),
-		);
+		let stream = match us.generic_stream(r, &ctx).await {
+			Ok(s) => s,
+			Err(e) => {
+				if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e)
+					&& let Some(log) = &mcp_log
+				{
+					log.non_atomic_mutate(|i| i.set_upstream_error(t));
+				}
+				return Err(e);
+			},
+		}
+		.register_cancellable(in_flight, id.clone(), service_name.to_string());
 		let stream = map_server_messages(stream, map_msg);
 
 		match guardrails {

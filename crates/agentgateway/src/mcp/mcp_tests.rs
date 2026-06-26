@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use agent_core::strng;
 use itertools::Itertools;
@@ -13,9 +12,10 @@ use secrecy::SecretString;
 use crate::http::auth::BackendAuth;
 use crate::http::authorization::{PolicySet, RuleSet};
 use crate::http::sessionpersistence::MCPSession;
+use crate::mcp::guardrails;
 use crate::mcp::handler::Relay;
 use crate::mcp::router::{McpBackendGroup, McpTarget};
-use crate::mcp::{FailureMode, McpAuthorization, guardrails};
+use crate::mcp::{FailureMode, McpAuthorization};
 use crate::proxy::httpproxy::PolicyClient;
 use crate::test_helpers::extauthmock::{ExtAuthMock, deny_response};
 use crate::test_helpers::proxymock::{
@@ -25,9 +25,8 @@ use crate::test_helpers::ratelimitmock::{RateLimitMock, over_limit_response};
 use crate::types::agent::{BackendTrafficPolicy, FrontendPolicy, PolicyTarget, TargetedPolicy};
 use crate::*;
 
-#[test]
-fn stream_to_stream_single() { crate::mcp::tests::block_on_big_stack(stream_to_stream_single_inner_body()) }
-async fn stream_to_stream_single_inner_body() {
+#[tokio::test]
+async fn stream_to_stream_single() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy(&mock, true, false).await;
 	let client = mcp_streamable_client(io).await;
@@ -42,9 +41,8 @@ async fn sse_to_stream_single() {
 	standard_sse_assertions(client).await;
 }
 
-#[test]
-fn stream_to_sse_single() { crate::mcp::tests::block_on_big_stack(stream_to_sse_single_inner_body()) }
-async fn stream_to_sse_single_inner_body() {
+#[tokio::test]
+async fn stream_to_sse_single() {
 	let mock = mock_sse_server().await;
 	let (_bind, io) = setup_proxy(&mock, true, true).await;
 	let client = mcp_streamable_client(io).await;
@@ -59,9 +57,8 @@ async fn sse_to_sse_single() {
 	standard_sse_assertions(client).await;
 }
 
-#[test]
-fn stream_to_multiplex() { crate::mcp::tests::block_on_big_stack(stream_to_multiplex_inner_body()) }
-async fn stream_to_multiplex_inner_body() {
+#[tokio::test]
+async fn stream_to_multiplex() {
 	let mock_stream = mock_streamable_http_server(true).await;
 	let mock_sse = mock_sse_server().await;
 	let t = setup_proxy_test("{}")
@@ -146,9 +143,8 @@ async fn stream_to_multiplex_inner_body() {
 	);
 }
 
-#[test]
-fn stream_to_multiplex_resources() { crate::mcp::tests::block_on_big_stack(stream_to_multiplex_resources_inner_body()) }
-async fn stream_to_multiplex_resources_inner_body() {
+#[tokio::test]
+async fn stream_to_multiplex_resources() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let t = setup_proxy_test("{}")
@@ -238,52 +234,8 @@ async fn stream_to_multiplex_resources_inner_body() {
 	);
 }
 
-#[test]
-fn multiplex_advertises_tool_and_resource_subscribe_capabilities() { crate::mcp::tests::block_on_big_stack(multiplex_advertises_tool_and_resource_subscribe_capabilities_inner_body()) }
-async fn multiplex_advertises_tool_and_resource_subscribe_capabilities_inner_body() {
-	let mock_a = mock_streamable_http_server(true).await;
-	let mock_b = mock_streamable_http_server(true).await;
-	let t = setup_proxy_test("{}")
-		.unwrap()
-		.with_multiplex_mcp_backend(
-			"mcp",
-			vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
-			true,
-		)
-		.with_bind(simple_bind())
-		.with_route(basic_named_route(strng::new("/mcp")));
-	let io = t.serve_real_listener(strng::new("bind")).await;
-	let client = mcp_streamable_client(io).await;
-	let caps = &client.peer_info().unwrap().capabilities;
-	assert_eq!(caps.tools.as_ref().unwrap().list_changed, Some(true));
-	assert_eq!(caps.prompts.as_ref().unwrap().list_changed, Some(true));
-	assert_eq!(caps.resources.as_ref().unwrap().list_changed, Some(true));
-	assert_eq!(caps.resources.as_ref().unwrap().subscribe, Some(true));
-}
-
-#[test]
-fn stateless_multiplex_does_not_advertise_resource_subscribe() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_does_not_advertise_resource_subscribe_inner_body()) }
-async fn stateless_multiplex_does_not_advertise_resource_subscribe_inner_body() {
-	let mock_a = mock_streamable_http_server(true).await;
-	let mock_b = mock_streamable_http_server(true).await;
-	let t = setup_proxy_test("{}")
-		.unwrap()
-		.with_multiplex_mcp_backend(
-			"mcp",
-			vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
-			false,
-		)
-		.with_bind(simple_bind())
-		.with_route(basic_named_route(strng::new("/mcp")));
-	let io = t.serve_real_listener(strng::new("bind")).await;
-	let client = mcp_streamable_client(io).await;
-	let caps = &client.peer_info().unwrap().capabilities;
-	assert_ne!(caps.resources.as_ref().unwrap().subscribe, Some(true));
-}
-
-#[test]
-fn stateless_multiplex_tool_call_initializes_only_target() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_tool_call_initializes_only_target_inner_body()) }
-async fn stateless_multiplex_tool_call_initializes_only_target_inner_body() {
+#[tokio::test]
+async fn stateless_multiplex_tool_call_initializes_only_target() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let t = setup_proxy_test("{}")
@@ -318,60 +270,44 @@ async fn stateless_multiplex_tool_call_initializes_only_target_inner_body() {
 	assert_eq!(b_init_after, b_init_before);
 }
 
-#[test]
-fn stateless_multiplex_get_prompt_initializes_only_target() {
-	// This test stacks the rmcp client, proxy, stateless initialize wrapper,
-	// upstream streamable HTTP client, and rmcp mock server initialize path in
-	// one integration flow. On small CI test stacks (reproduced with
-	// RUST_MIN_STACK=1048576) that combined async polling stack overflows before
-	// the initialize response completes. Use an explicit worker stack here so the
-	// test continues to exercise the real path instead of depending on libtest's
-	// default thread stack.
-	let runtime = tokio::runtime::Builder::new_multi_thread()
-		.enable_all()
-		.thread_stack_size(4 * 1024 * 1024)
-		.build()
+#[tokio::test]
+async fn stateless_multiplex_get_prompt_initializes_only_target() {
+	let mock_a = mock_streamable_http_server(true).await;
+	let mock_b = mock_streamable_http_server(true).await;
+	let t = setup_proxy_test("{}")
+		.unwrap()
+		.with_multiplex_mcp_backend(
+			"mcp",
+			vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
+			false,
+		)
+		.with_bind(simple_bind())
+		.with_route(basic_named_route(strng::new("/mcp")));
+	let io = t.serve_real_listener(strng::new("bind")).await;
+	let client = mcp_streamable_client(io).await;
+	let a_init_before = mock_a.init_count().await;
+	let b_init_before = mock_b.init_count().await;
+
+	let _ = client
+		.get_prompt(
+			rmcp::model::GetPromptRequestParams::new("a_example_prompt").with_arguments(
+				serde_json::json!({"message": "hello"})
+					.as_object()
+					.cloned()
+					.unwrap(),
+			),
+		)
+		.await
 		.unwrap();
-	runtime.block_on(async {
-		let mock_a = mock_streamable_http_server(true).await;
-		let mock_b = mock_streamable_http_server(true).await;
-		let t = setup_proxy_test("{}")
-			.unwrap()
-			.with_multiplex_mcp_backend(
-				"mcp",
-				vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
-				false,
-			)
-			.with_bind(simple_bind())
-			.with_route(basic_named_route(strng::new("/mcp")));
-		let io = t.serve_real_listener(strng::new("bind")).await;
-		let client = mcp_streamable_client(io).await;
-		let a_init_before = mock_a.init_count().await;
-		let b_init_before = mock_b.init_count().await;
 
-		let _ = client
-			.get_prompt(
-				rmcp::model::GetPromptRequestParams::new("a_example_prompt").with_arguments(
-					serde_json::json!({"message": "hello"})
-						.as_object()
-						.cloned()
-						.unwrap(),
-				),
-			)
-			.await
-			.unwrap();
-
-		let a_init_after = mock_a.init_count().await;
-		let b_init_after = mock_b.init_count().await;
-		assert_eq!(a_init_after, a_init_before + 1);
-		assert_eq!(b_init_after, b_init_before);
-	});
-	runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+	let a_init_after = mock_a.init_count().await;
+	let b_init_after = mock_b.init_count().await;
+	assert_eq!(a_init_after, a_init_before + 1);
+	assert_eq!(b_init_after, b_init_before);
 }
 
-#[test]
-fn stateless_multiplex_delete_session_skips_uninitialized_targets() { crate::mcp::tests::block_on_big_stack(stateless_multiplex_delete_session_skips_uninitialized_targets_inner_body()) }
-async fn stateless_multiplex_delete_session_skips_uninitialized_targets_inner_body() {
+#[tokio::test]
+async fn stateless_multiplex_delete_session_skips_uninitialized_targets() {
 	let mock_a = mock_streamable_http_server(true).await;
 	let mock_b = mock_streamable_http_server(true).await;
 	let relay = Relay::new(
@@ -384,7 +320,10 @@ async fn stateless_multiplex_delete_session_skips_uninitialized_targets_inner_bo
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 	let session_manager =
@@ -554,27 +493,24 @@ fn mcp_json_post<'a>(
 		.json(body)
 }
 
-#[test]
-fn stateless_to_stateful() { crate::mcp::tests::block_on_big_stack(stateless_to_stateful_inner_body()) }
-async fn stateless_to_stateful_inner_body() {
+#[tokio::test]
+async fn stateless_to_stateful() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy(&mock, false, false).await;
 	let client = mcp_streamable_client(io).await;
 	standard_assertions(client).await;
 }
 
-#[test]
-fn stateless_to_stateless() { crate::mcp::tests::block_on_big_stack(stateless_to_stateless_inner_body()) }
-async fn stateless_to_stateless_inner_body() {
+#[tokio::test]
+async fn stateless_to_stateless() {
 	let mock = mock_streamable_http_server(false).await;
 	let (_bind, io) = setup_proxy(&mock, false, false).await;
 	let client = mcp_streamable_client(io).await;
 	standard_assertions(client).await;
 }
 
-#[test]
-fn stream_to_stream_single_tls() { crate::mcp::tests::block_on_big_stack(stream_to_stream_single_tls_inner_body()) }
-async fn stream_to_stream_single_tls_inner_body() {
+#[tokio::test]
+async fn stream_to_stream_single_tls() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy_policies(
 		&mock,
@@ -606,9 +542,8 @@ async fn stream_to_stream_single_tls_inner_body() {
 
 /// Test that calling a tool denied by MCP authorization policy returns proper JSON-RPC error
 /// with INVALID_PARAMS error code (-32602) and message "Unknown tool: {tool_name}"
-#[test]
-fn authorization_denied_returns_unknown_tool_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_tool_error_inner_body()) }
-async fn authorization_denied_returns_unknown_tool_error_inner_body() {
+#[tokio::test]
+async fn authorization_denied_returns_unknown_tool_error() {
 	let mock = mock_streamable_http_server(true).await;
 
 	// Create an MCP authorization policy that denies all tools
@@ -671,9 +606,8 @@ async fn authorization_denied_returns_unknown_tool_error_inner_body() {
 
 /// Test that getting a prompt denied by MCP authorization policy returns proper JSON-RPC error
 /// with INVALID_PARAMS error code (-32602) and message "Unknown prompt: {prompt_name}"
-#[test]
-fn authorization_denied_returns_unknown_prompt_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_prompt_error_inner_body()) }
-async fn authorization_denied_returns_unknown_prompt_error_inner_body() {
+#[tokio::test]
+async fn authorization_denied_returns_unknown_prompt_error() {
 	let mock = mock_streamable_http_server(true).await;
 
 	// Create an MCP authorization policy that denies all prompts
@@ -727,9 +661,8 @@ async fn authorization_denied_returns_unknown_prompt_error_inner_body() {
 
 /// Test that reading a resource denied by MCP authorization policy returns proper JSON-RPC error
 /// with INVALID_PARAMS error code (-32602) and message "Unknown resource: {resource_uri}"
-#[test]
-fn authorization_denied_returns_unknown_resource_error() { crate::mcp::tests::block_on_big_stack(authorization_denied_returns_unknown_resource_error_inner_body()) }
-async fn authorization_denied_returns_unknown_resource_error_inner_body() {
+#[tokio::test]
+async fn authorization_denied_returns_unknown_resource_error() {
 	let mock = mock_streamable_http_server(true).await;
 
 	// Create an MCP authorization policy that denies all resources
@@ -783,9 +716,8 @@ async fn authorization_denied_returns_unknown_resource_error_inner_body() {
 	}
 }
 
-#[test]
-fn resource_subscribe_and_unsubscribe_forward_to_single_backend() { crate::mcp::tests::block_on_big_stack(resource_subscribe_and_unsubscribe_forward_to_single_backend_inner_body()) }
-async fn resource_subscribe_and_unsubscribe_forward_to_single_backend_inner_body() {
+#[tokio::test]
+async fn resource_subscribe_and_unsubscribe_forward_to_single_backend() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy(&mock, true, false).await;
 	let client = mcp_streamable_client(io).await;
@@ -802,101 +734,10 @@ async fn resource_subscribe_and_unsubscribe_forward_to_single_backend_inner_body
 		.unwrap();
 }
 
-#[test]
-fn multiplex_resource_subscribe_and_unsubscribe_route_to_target() { crate::mcp::tests::block_on_big_stack(multiplex_resource_subscribe_and_unsubscribe_route_to_target_inner_body()) }
-async fn multiplex_resource_subscribe_and_unsubscribe_route_to_target_inner_body() {
-	let mock_a = mock_streamable_http_server(true).await;
-	let mock_b = mock_streamable_http_server(true).await;
-	let t = setup_proxy_test("{}")
-		.unwrap()
-		.with_multiplex_mcp_backend(
-			"mcp",
-			vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
-			true,
-		)
-		.with_bind(simple_bind())
-		.with_route(basic_named_route(strng::new("/mcp")));
-	let io = t.serve_real_listener(strng::new("bind")).await;
-	let client = mcp_streamable_client(io).await;
-
-	client
-		.subscribe(rmcp::model::SubscribeRequestParams::new(
-			"a+memo://insights",
-		))
-		.await
-		.unwrap();
-	client
-		.unsubscribe(rmcp::model::UnsubscribeRequestParams::new(
-			"a+memo://insights",
-		))
-		.await
-		.unwrap();
-
-	assert!(
-		client
-			.subscribe(rmcp::model::SubscribeRequestParams::new("memo://insights"))
-			.await
-			.is_err(),
-		"expected unprefixed multiplex resource subscribe to fail"
-	);
-}
-
-#[test]
-fn multiplex_resource_updated_notification_is_prefixed() { crate::mcp::tests::block_on_big_stack(multiplex_resource_updated_notification_is_prefixed_inner_body()) }
-async fn multiplex_resource_updated_notification_is_prefixed_inner_body() {
-	let mock_a = mock_streamable_http_server(true).await;
-	let mock_b = mock_streamable_http_server(true).await;
-	let t = setup_proxy_test("{}")
-		.unwrap()
-		.with_multiplex_mcp_backend(
-			"mcp",
-			vec![("a", mock_a.addr, false), ("b", mock_b.addr, false)],
-			true,
-		)
-		.with_bind(simple_bind())
-		.with_route(basic_named_route(strng::new("/mcp")));
-	let io = t.serve_real_listener(strng::new("bind")).await;
-	let (client, updated_uri, notify) = mcp_streamable_client_capture_resource_updates(io).await;
-
-	client
-		.subscribe(rmcp::model::SubscribeRequestParams::new(
-			"a+memo://insights",
-		))
-		.await
-		.unwrap();
-	tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
-		.await
-		.unwrap();
-
-	assert_eq!(
-		updated_uri.lock().await.as_deref(),
-		Some("a+memo://insights")
-	);
-}
-
-#[test]
-fn single_resource_updated_notification_is_not_prefixed() { crate::mcp::tests::block_on_big_stack(single_resource_updated_notification_is_not_prefixed_inner_body()) }
-async fn single_resource_updated_notification_is_not_prefixed_inner_body() {
-	let mock = mock_streamable_http_server(true).await;
-	let (_bind, io) = setup_proxy(&mock, true, false).await;
-	let (client, updated_uri, notify) = mcp_streamable_client_capture_resource_updates(io).await;
-
-	client
-		.subscribe(rmcp::model::SubscribeRequestParams::new("memo://insights"))
-		.await
-		.unwrap();
-	tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
-		.await
-		.unwrap();
-
-	assert_eq!(updated_uri.lock().await.as_deref(), Some("memo://insights"));
-}
-
 /// Test that a deny policy targeting a specific tool filters only that tool from list_tools,
 /// while leaving all other tools accessible.
-#[test]
-fn authorization_deny_specific_tool_filters_only_that_tool() { crate::mcp::tests::block_on_big_stack(authorization_deny_specific_tool_filters_only_that_tool_inner_body()) }
-async fn authorization_deny_specific_tool_filters_only_that_tool_inner_body() {
+#[tokio::test]
+async fn authorization_deny_specific_tool_filters_only_that_tool() {
 	let mock = mock_streamable_http_server(true).await;
 
 	// Create a deny policy that only denies the "echo" tool
@@ -1054,9 +895,8 @@ async fn authorization_deny_with_request_header_filters_per_agent() {
 	);
 }
 
-#[test]
-fn mcp_authentication_early_response_transformation_has_request_context() { crate::mcp::tests::block_on_big_stack(mcp_authentication_early_response_transformation_has_request_context_inner_body()) }
-async fn mcp_authentication_early_response_transformation_has_request_context_inner_body() {
+#[tokio::test]
+async fn mcp_authentication_early_response_transformation_has_request_context() {
 	let mock = mock_streamable_http_server(true).await;
 	let authn = crate::types::agent::McpAuthentication {
 		issuer: "https://issuer.example.com".to_string(),
@@ -1187,10 +1027,7 @@ fn access_log_payload_policy() -> crate::types::frontend::LoggingPolicy {
 				"mcp_prompt_target_cel": "mcp.prompt.target",
 				"mcp_args_cel": "mcp.tool.arguments",
 				"mcp_result_cel": "mcp.tool.result",
-				"mcp_error_cel": "mcp.tool.error",
-				"proxy_request_processing_duration_cel": "proxy.requestProcessingDuration",
-				"proxy_upstream_duration_cel": "proxy.upstreamDuration",
-				"proxy_response_processing_duration_cel": "proxy.responseProcessingDuration"
+				"mcp_error_cel": "mcp.tool.error"
 			}
 		}))
 		.unwrap();
@@ -1216,7 +1053,7 @@ async fn setup_access_log_mcp_proxy(mock: &MockServer) -> (TestBind, SocketAddr)
 		key: "frontend/accessLog".into(),
 		name: None,
 		target: PolicyTarget::Gateway(listener_name.clone().into()),
-		inheritance: Default::default(),
+		inheritance: crate::types::agent::PolicyInheritance::Default,
 		policy: FrontendPolicy::AccessLog(access_log_payload_policy()).into(),
 	});
 	assert!(
@@ -1230,9 +1067,8 @@ async fn setup_access_log_mcp_proxy(mock: &MockServer) -> (TestBind, SocketAddr)
 	(t, io)
 }
 
-#[test]
-fn tool_call_exposes_payload_fields_to_access_log_cel() { crate::mcp::tests::block_on_big_stack(tool_call_exposes_payload_fields_to_access_log_cel_inner_body()) }
-async fn tool_call_exposes_payload_fields_to_access_log_cel_inner_body() {
+#[tokio::test]
+async fn tool_call_exposes_payload_fields_to_access_log_cel() {
 	let mock = mock_streamable_http_server(true).await;
 	let trace_id = format!("mcp-e2e-{}", uuid::Uuid::new_v4());
 	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
@@ -1294,9 +1130,6 @@ async fn tool_call_exposes_payload_fields_to_access_log_cel_inner_body() {
 	assert_eq!(result_json["traceId"], trace_id);
 	assert_eq!(result_json["hi"], "world");
 	assert!(log.get("mcp_error_cel").is_none());
-	assert_duration_log_field(&log, "proxy_request_processing_duration_cel");
-	assert_duration_log_field(&log, "proxy_upstream_duration_cel");
-	assert_duration_log_field(&log, "proxy_response_processing_duration_cel");
 
 	assert_eq!(
 		log.get("gen_ai.tool.name"),
@@ -1306,19 +1139,8 @@ async fn tool_call_exposes_payload_fields_to_access_log_cel_inner_body() {
 	assert!(log.get("gen_ai.tool.call.result").is_none());
 }
 
-fn assert_duration_log_field(log: &serde_json::Value, field: &str) {
-	assert!(
-		log
-			.get(field)
-			.and_then(|value| value.as_str())
-			.is_some_and(|value| !value.is_empty()),
-		"{field} should be present and non-empty"
-	);
-}
-
-#[test]
-fn tool_call_error_exposes_error_payload_to_access_log_cel() { crate::mcp::tests::block_on_big_stack(tool_call_error_exposes_error_payload_to_access_log_cel_inner_body()) }
-async fn tool_call_error_exposes_error_payload_to_access_log_cel_inner_body() {
+#[tokio::test]
+async fn tool_call_error_exposes_error_payload_to_access_log_cel() {
 	let mock = mock_streamable_http_server(true).await;
 	let trace_id = format!("mcp-e2e-error-{}", uuid::Uuid::new_v4());
 	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
@@ -1426,9 +1248,8 @@ async fn legacy_sse_tool_call_exposes_arguments_without_terminal_payloads() {
 	assert!(log.get("gen_ai.tool.call.result").is_none());
 }
 
-#[test]
-fn prompt_request_emits_gen_ai_prompt_name() { crate::mcp::tests::block_on_big_stack(prompt_request_emits_gen_ai_prompt_name_inner_body()) }
-async fn prompt_request_emits_gen_ai_prompt_name_inner_body() {
+#[tokio::test]
+async fn prompt_request_emits_gen_ai_prompt_name() {
 	let mock = mock_streamable_http_server(true).await;
 	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
 	let client = mcp_streamable_client(io).await;
@@ -1487,8 +1308,8 @@ async fn setup_proxy_policies(
 	(t, io)
 }
 
-// Like `setup_proxy_policies`, but also attaches `target_policies` to the opaque
-// backend behind the MCP target so they run on the upstream leg.
+// Like `setup_proxy_policies`, but also attaches `target_policies` to the MCP target
+// (used by guardrails tests that exercise per-target backend transformations).
 async fn setup_proxy_policies_with_target(
 	mock: &MockServer,
 	stateful: bool,
@@ -1511,6 +1332,64 @@ async fn setup_proxy_policies_with_target(
 	(t, io)
 }
 
+/// Shared capture of every upstream request's headers, for tests that assert a
+/// guardrails mutation reached the upstream MCP server.
+type HeaderCapture = std::sync::Arc<std::sync::Mutex<Vec<http::HeaderMap>>>;
+
+/// Like `mock_streamable_http_server`, but records the headers of every inbound
+/// request into the returned [`HeaderCapture`] via an axum middleware layer.
+async fn mock_streamable_http_server_with_capture(stateful: bool) -> (MockServer, HeaderCapture) {
+	use mockserver::Counter;
+	use rmcp::transport::streamable_http_server::StreamableHttpService;
+	use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+	agent_core::telemetry::testing::setup_test_logging();
+	let init_counter = std::sync::Arc::new(tokio::sync::Mutex::new(0_i32));
+	let capture: HeaderCapture = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+	let service = StreamableHttpService::new(
+		{
+			let init_counter = init_counter.clone();
+			move || Ok(Counter::new(init_counter.clone()))
+		},
+		LocalSessionManager::default().into(),
+		StreamableHttpServerConfig::default()
+			.with_sse_retry(None)
+			.with_sse_keep_alive(None)
+			.with_stateful_mode(stateful)
+			.with_json_response(false),
+	);
+
+	let (tx, rx) = tokio::sync::oneshot::channel();
+	let cap = capture.clone();
+	let router = axum::Router::new().nest_service("/mcp", service).layer(
+		axum::middleware::from_fn(
+			move |req: axum::extract::Request, next: axum::middleware::Next| {
+				let cap = cap.clone();
+				async move {
+					cap.lock().unwrap().push(req.headers().clone());
+					next.run(req).await
+				}
+			},
+		),
+	);
+	let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let addr = tcp_listener.local_addr().unwrap();
+	tokio::spawn(async move {
+		let _ = axum::serve(tcp_listener, router)
+			.with_graceful_shutdown(async { rx.await.unwrap() })
+			.await;
+		info!("server stopped");
+	});
+	(
+		MockServer {
+			addr,
+			init_counter,
+			_cancel: tx,
+		},
+		capture,
+	)
+}
+
 pub async fn mcp_streamable_client(
 	s: SocketAddr,
 ) -> RunningService<RoleClient, InitializeRequestParams> {
@@ -1524,54 +1403,13 @@ pub async fn mcp_streamable_client(
 		Implementation::new("test client".to_string(), "0.0.1".to_string()),
 	);
 
-	Box::pin(client_info.serve(transport))
+	client_info
+		.serve(transport)
 		.await
 		.inspect_err(|e| {
 			tracing::error!("client error: {:?}", e);
 		})
 		.unwrap()
-}
-
-#[derive(Clone)]
-struct ResourceUpdateClient {
-	updated_uri: Arc<tokio::sync::Mutex<Option<String>>>,
-	notify: Arc<tokio::sync::Notify>,
-}
-
-impl rmcp::ClientHandler for ResourceUpdateClient {
-	async fn on_resource_updated(
-		&self,
-		params: rmcp::model::ResourceUpdatedNotificationParam,
-		_: rmcp::service::NotificationContext<RoleClient>,
-	) {
-		*self.updated_uri.lock().await = Some(params.uri);
-		self.notify.notify_one();
-	}
-}
-
-async fn mcp_streamable_client_capture_resource_updates(
-	s: SocketAddr,
-) -> (
-	RunningService<RoleClient, ResourceUpdateClient>,
-	Arc<tokio::sync::Mutex<Option<String>>>,
-	Arc<tokio::sync::Notify>,
-) {
-	use rmcp::ServiceExt;
-	use rmcp::transport::StreamableHttpClientTransport;
-	let transport =
-		StreamableHttpClientTransport::<reqwest::Client>::from_uri(format!("http://{s}/mcp"));
-	let updated_uri = Arc::new(tokio::sync::Mutex::new(None));
-	let notify = Arc::new(tokio::sync::Notify::new());
-	let client = ResourceUpdateClient {
-		updated_uri: updated_uri.clone(),
-		notify: notify.clone(),
-	};
-
-	(
-		Box::pin(client.serve(transport)).await.unwrap(),
-		updated_uri,
-		notify,
-	)
 }
 
 type LegacyService = legacy_rmcp::service::RunningService<
@@ -1598,7 +1436,7 @@ pub async fn mcp_sse_client(s: SocketAddr) -> LegacyService {
 		},
 	};
 
-	Box::pin(client_info.serve(transport)).await.unwrap()
+	client_info.serve(transport).await.unwrap()
 }
 
 struct MockServer {
@@ -1614,27 +1452,11 @@ impl MockServer {
 }
 
 async fn mock_streamable_http_server(stateful: bool) -> MockServer {
-	mock_streamable_http_server_inner(stateful, None, None).await
-}
-
-type HeaderCapture = std::sync::Arc<std::sync::Mutex<Vec<http::HeaderMap>>>;
-
-async fn mock_streamable_http_server_with_capture(stateful: bool) -> (MockServer, HeaderCapture) {
-	let capture: HeaderCapture = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-	let server = mock_streamable_http_server_inner(stateful, Some(capture.clone()), None).await;
-	(server, capture)
+	mock_streamable_http_server_with_delay(stateful, None).await
 }
 
 async fn mock_streamable_http_server_with_delay(
 	stateful: bool,
-	delay: Option<std::time::Duration>,
-) -> MockServer {
-	mock_streamable_http_server_inner(stateful, None, delay).await
-}
-
-async fn mock_streamable_http_server_inner(
-	stateful: bool,
-	capture: Option<HeaderCapture>,
 	delay: Option<std::time::Duration>,
 ) -> MockServer {
 	use mockserver::Counter;
@@ -1658,17 +1480,6 @@ async fn mock_streamable_http_server_inner(
 
 	let (tx, rx) = tokio::sync::oneshot::channel();
 	let mut router = axum::Router::new().nest_service("/mcp", service);
-	if let Some(cap) = capture {
-		router = router.layer(axum::middleware::from_fn(
-			move |req: axum::extract::Request, next: axum::middleware::Next| {
-				let cap = cap.clone();
-				async move {
-					cap.lock().unwrap().push(req.headers().clone());
-					next.run(req).await
-				}
-			},
-		));
-	}
 	if let Some(d) = delay {
 		router = router.layer(axum::middleware::from_fn(
 			move |req: axum::extract::Request, next: axum::middleware::Next| async move {
@@ -1681,11 +1492,75 @@ async fn mock_streamable_http_server_inner(
 	let addr = tcp_listener.local_addr().unwrap();
 	tokio::spawn(async move {
 		let _ = axum::serve(tcp_listener, router)
-			.with_graceful_shutdown(async {
-				let _ = rx.await;
-			})
+			.with_graceful_shutdown(async { rx.await.unwrap() })
 			.await;
 		info!("server stopped");
+	});
+	MockServer {
+		addr,
+		init_counter,
+		_cancel: tx,
+	}
+}
+
+/// A streamable-HTTP MCP mock that completes the `initialize` handshake (and any
+/// `tools/list`) normally but returns a fixed HTTP error `status` for every
+/// `tools/call` POST. Lets a directed `tools/call` reach the gateway's
+/// single-target dispatch and fail at `generic_stream` with
+/// `UpstreamError::Http(ClientError::Status(..))`.
+#[cfg(feature = "adobe")]
+async fn mock_streamable_http_server_failing_tools_call(status: ::http::StatusCode) -> MockServer {
+	use mockserver::Counter;
+	use rmcp::transport::streamable_http_server::StreamableHttpService;
+	use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+
+	agent_core::telemetry::testing::setup_test_logging();
+	let init_counter = std::sync::Arc::new(tokio::sync::Mutex::new(0_i32));
+
+	let service = StreamableHttpService::new(
+		{
+			let init_counter = init_counter.clone();
+			move || Ok(Counter::new(init_counter.clone()))
+		},
+		LocalSessionManager::default().into(),
+		StreamableHttpServerConfig::default()
+			.with_sse_retry(None)
+			.with_sse_keep_alive(None)
+			.with_stateful_mode(true)
+			.with_json_response(false),
+	);
+
+	let (tx, rx) = tokio::sync::oneshot::channel();
+	let router = axum::Router::new()
+		.nest_service("/mcp", service)
+		.layer(axum::middleware::from_fn(
+			move |req: axum::extract::Request, next: axum::middleware::Next| async move {
+				let (parts, body) = req.into_parts();
+				let bytes = axum::body::to_bytes(body, usize::MAX)
+					.await
+					.unwrap_or_default();
+				let method = serde_json::from_slice::<serde_json::Value>(&bytes)
+					.ok()
+					.and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_string));
+				let req = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
+				if method.as_deref() == Some("tools/call") {
+					::http::Response::builder()
+						.status(status)
+						.body(axum::body::Body::from("upstream error"))
+						.unwrap()
+				} else {
+					next.run(req).await
+				}
+			},
+		));
+
+	let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let addr = tcp_listener.local_addr().unwrap();
+	tokio::spawn(async move {
+		let _ = axum::serve(tcp_listener, router)
+			.with_graceful_shutdown(async { rx.await.unwrap() })
+			.await;
+		info!("failing-tools-call server stopped");
 	});
 	MockServer {
 		addr,
@@ -2007,24 +1882,13 @@ mod mockserver {
 		async fn subscribe(
 			&self,
 			SubscribeRequestParams { uri, .. }: SubscribeRequestParams,
-			ctx: RequestContext<RoleServer>,
+			_: RequestContext<RoleServer>,
 		) -> Result<(), McpError> {
 			match uri.as_str() {
-				"str:////Users/to/some/path/" | "memo://insights" => {
-					let peer = ctx.peer;
-					let notify_uri = uri.clone();
-					tokio::spawn(async move {
-						let _ = peer
-							.notify_resource_updated(ResourceUpdatedNotificationParam::new(notify_uri))
-							.await;
-					});
-					Ok(())
-				},
-				_ => Err(McpError::resource_not_found(
-					"resource_not_found",
-					Some(json!({
-							"uri": uri
-					})),
+				"memo://insights" | "str:////Users/to/some/path/" => Ok(()),
+				other => Err(McpError::invalid_params(
+					format!("subscribe expected unwrapped upstream uri, got {other}"),
+					None,
 				)),
 			}
 		}
@@ -2399,33 +2263,36 @@ mod legacymockserver {
 	}
 }
 
-#[test]
-fn test_zero_targets_fail_closed() { crate::mcp::tests::block_on_big_stack(test_zero_targets_fail_closed_inner_body()) }
-async fn test_zero_targets_fail_closed_inner_body() {
+#[tokio::test]
+async fn test_zero_targets_fail_closed() {
 	let backend = McpBackendGroup {
 		targets: vec![],
 		..Default::default()
 	};
-	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
+	let client = PolicyClient {
+		inputs: setup_proxy_test("{}").unwrap().pi,
+		outbound: None,
+	};
 	let err = crate::mcp::upstream::UpstreamGroup::new(client, backend).unwrap_err();
 	assert!(matches!(err, crate::mcp::Error::NoBackends));
 }
 
-#[test]
-fn test_zero_targets_fail_open() { crate::mcp::tests::block_on_big_stack(test_zero_targets_fail_open_inner_body()) }
-async fn test_zero_targets_fail_open_inner_body() {
+#[tokio::test]
+async fn test_zero_targets_fail_open() {
 	let backend = McpBackendGroup {
 		targets: vec![],
 		failure_mode: FailureMode::FailOpen,
 		..Default::default()
 	};
-	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
+	let client = PolicyClient {
+		inputs: setup_proxy_test("{}").unwrap().pi,
+		outbound: None,
+	};
 	crate::mcp::upstream::UpstreamGroup::new(client, backend).unwrap();
 }
 
-#[test]
-fn test_setup_partial_success_fail_open() { crate::mcp::tests::block_on_big_stack(test_setup_partial_success_fail_open_inner_body()) }
-async fn test_setup_partial_success_fail_open_inner_body() {
+#[tokio::test]
+async fn test_setup_partial_success_fail_open() {
 	// Test skipping failed stdio targets
 	let backend = McpBackendGroup {
 		targets: vec![
@@ -2458,14 +2325,16 @@ async fn test_setup_partial_success_fail_open_inner_body() {
 		failure_mode: FailureMode::FailOpen,
 		..Default::default()
 	};
-	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
+	let client = PolicyClient {
+		inputs: setup_proxy_test("{}").unwrap().pi,
+		outbound: None,
+	};
 	let group = crate::mcp::upstream::UpstreamGroup::new(client, backend).unwrap();
 	assert_eq!(group.size(), 1);
 }
 
-#[test]
-fn test_all_targets_fail_open_still_errors() { crate::mcp::tests::block_on_big_stack(test_all_targets_fail_open_still_errors_inner_body()) }
-async fn test_all_targets_fail_open_still_errors_inner_body() {
+#[tokio::test]
+async fn test_all_targets_fail_open_still_errors() {
 	let backend = McpBackendGroup {
 		targets: vec![
 			Arc::new(McpTarget {
@@ -2497,7 +2366,10 @@ async fn test_all_targets_fail_open_still_errors_inner_body() {
 		failure_mode: FailureMode::FailOpen,
 		..Default::default()
 	};
-	let client = PolicyClient::new(setup_proxy_test("{}").unwrap().pi);
+	let client = PolicyClient {
+		inputs: setup_proxy_test("{}").unwrap().pi,
+		outbound: None,
+	};
 	let err = crate::mcp::upstream::UpstreamGroup::new(client, backend).unwrap_err();
 	assert!(matches!(err, crate::mcp::Error::NoBackends));
 }
@@ -2585,10 +2457,6 @@ fn empty_mcp_policies() -> crate::mcp::McpAuthorizationSet {
 	crate::mcp::McpAuthorizationSet::new(crate::http::authorization::RuleSets::from(Vec::new()))
 }
 
-fn empty_cel() -> crate::mcp::rbac::CelExecWrapper {
-	crate::mcp::rbac::CelExecWrapper::new(::http::Request::new(()))
-}
-
 fn persisted_session(
 	target_name: &str,
 	session: &str,
@@ -2623,7 +2491,10 @@ fn test_openapi_targets_emit_stateless_session_state() {
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
@@ -2668,7 +2539,10 @@ fn test_sse_targets_emit_stateless_session_state() {
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
@@ -2702,9 +2576,8 @@ fn test_sse_targets_emit_stateless_session_state() {
 	);
 }
 
-#[test]
-fn test_stdio_targets_remain_non_stateless() { crate::mcp::tests::block_on_big_stack(test_stdio_targets_remain_non_stateless_inner_body()) }
-async fn test_stdio_targets_remain_non_stateless_inner_body() {
+#[tokio::test]
+async fn test_stdio_targets_remain_non_stateless() {
 	let relay = Relay::new(
 		McpBackendGroup {
 			targets: vec![fake_stdio_target("stdio")],
@@ -2712,16 +2585,18 @@ async fn test_stdio_targets_remain_non_stateless_inner_body() {
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
 	assert!(relay.get_sessions().is_none());
 }
 
-#[test]
-fn test_fanout_deletion_fail_open_skips_failed_upstreams() { crate::mcp::tests::block_on_big_stack(test_fanout_deletion_fail_open_skips_failed_upstreams_inner_body()) }
-async fn test_fanout_deletion_fail_open_skips_failed_upstreams_inner_body() {
+#[tokio::test]
+async fn test_fanout_deletion_fail_open_skips_failed_upstreams() {
 	let good = mock_streamable_http_server(true).await;
 	let bad_addr = SocketAddr::from(([127, 0, 0, 1], 31999));
 	let relay = Relay::new(
@@ -2735,7 +2610,10 @@ async fn test_fanout_deletion_fail_open_skips_failed_upstreams_inner_body() {
 			session_idle_ttl: crate::mcp::DEFAULT_SESSION_IDLE_TTL,
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
@@ -2765,7 +2643,10 @@ fn test_set_sessions_matches_by_target_name() {
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
@@ -2811,7 +2692,10 @@ fn test_set_sessions_rejects_mismatched_target_set() {
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
@@ -2852,7 +2736,10 @@ fn test_merge_initialize_merges_upstream_instructions_when_multiplexing() {
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
@@ -2879,7 +2766,8 @@ fn test_merge_initialize_merges_upstream_instructions_when_multiplexing() {
 		),
 	];
 
-	let result = merge_fn(results, &empty_cel()).unwrap();
+	let cel = crate::mcp::rbac::CelExecWrapper::new(::http::Request::builder().uri("http://example.com/").body(()).unwrap());
+	let result = merge_fn(results, &cel).unwrap();
 	let info = match result {
 		ServerResult::InitializeResult(ir) => ir,
 		other => panic!("expected InitializeResult, got: {:?}", other),
@@ -2923,7 +2811,10 @@ fn test_merge_initialize_no_instructions_when_multiplexing() {
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
@@ -2938,7 +2829,8 @@ fn test_merge_initialize_no_instructions_when_multiplexing() {
 		),
 	)];
 
-	let result = merge_fn(results, &empty_cel()).unwrap();
+	let cel = crate::mcp::rbac::CelExecWrapper::new(::http::Request::builder().uri("http://example.com/").body(()).unwrap());
+	let result = merge_fn(results, &cel).unwrap();
 	let info = match result {
 		ServerResult::InitializeResult(ir) => ir,
 		other => panic!("expected InitializeResult, got: {:?}", other),
@@ -2971,7 +2863,10 @@ fn test_merge_initialize_forwards_single_backend_without_multiplexing() {
 			..Default::default()
 		},
 		empty_mcp_policies(),
-		PolicyClient::new(setup_proxy_test("{}").unwrap().pi),
+		PolicyClient {
+			inputs: setup_proxy_test("{}").unwrap().pi,
+			outbound: None,
+		},
 	)
 	.unwrap();
 
@@ -2987,7 +2882,8 @@ fn test_merge_initialize_forwards_single_backend_without_multiplexing() {
 		),
 	)];
 
-	let result = merge_fn(results, &empty_cel()).unwrap();
+	let cel = crate::mcp::rbac::CelExecWrapper::new(::http::Request::builder().uri("http://example.com/").body(()).unwrap());
+	let result = merge_fn(results, &cel).unwrap();
 	let info = match result {
 		ServerResult::InitializeResult(ir) => ir,
 		other => panic!("expected InitializeResult, got: {:?}", other),
@@ -3024,20 +2920,12 @@ async fn test_runtime_fanout_fail_open() {
 
 	let streams = vec![("ok".into(), ok_stream), ("bad".into(), err_stream)];
 
-	let merge = Box::new(
-		|results: Vec<(Strng, rmcp::model::ServerResult)>, _cel: &_| {
-			// Just return the first one for simplicity in this test
-			Ok(results.into_iter().next().unwrap().1)
-		},
-	);
+	let merge = Box::new(|results: Vec<(Strng, rmcp::model::ServerResult)>, _cel: &crate::mcp::rbac::CelExecWrapper| {
+		// Just return the first one for simplicity in this test
+		Ok(results.into_iter().next().unwrap().1)
+	});
 
-	let mut ms = MergeStream::new(
-		streams,
-		RequestId::Number(1),
-		merge,
-		empty_cel(),
-		FailureMode::FailOpen,
-	);
+	let mut ms = MergeStream::new(streams, RequestId::Number(1), merge, crate::mcp::rbac::CelExecWrapper::new(::http::Request::builder().uri("http://example.com/").body(()).unwrap()), FailureMode::FailOpen);
 
 	let res = ms.next().await;
 	assert!(res.is_some());
@@ -3061,28 +2949,20 @@ async fn test_runtime_fanout_fail_open_all_fail() {
 
 	let streams = vec![("bad1".into(), err_stream1), ("bad2".into(), err_stream2)];
 
-	let merge = Box::new(
-		|results: Vec<(Strng, rmcp::model::ServerResult)>, _cel: &_| {
-			// All failed, so results should be empty.
-			// Return an empty success result (idiomatic for FailOpen).
-			assert!(results.is_empty());
-			Ok(rmcp::model::ServerResult::ListToolsResult(
-				ListToolsResult {
-					tools: vec![],
-					next_cursor: None,
-					meta: None,
-				},
-			))
-		},
-	);
+	let merge = Box::new(|results: Vec<(Strng, rmcp::model::ServerResult)>, _cel: &crate::mcp::rbac::CelExecWrapper| {
+		// All failed, so results should be empty.
+		// Return an empty success result (idiomatic for FailOpen).
+		assert!(results.is_empty());
+		Ok(rmcp::model::ServerResult::ListToolsResult(
+			ListToolsResult {
+				tools: vec![],
+				next_cursor: None,
+				meta: None,
+			},
+		))
+	});
 
-	let mut ms = MergeStream::new(
-		streams,
-		RequestId::Number(1),
-		merge,
-		empty_cel(),
-		FailureMode::FailOpen,
-	);
+	let mut ms = MergeStream::new(streams, RequestId::Number(1), merge, crate::mcp::rbac::CelExecWrapper::new(::http::Request::builder().uri("http://example.com/").body(()).unwrap()), FailureMode::FailOpen);
 
 	let res = ms.next().await;
 	assert!(res.is_some());
@@ -3094,9 +2974,8 @@ async fn test_runtime_fanout_fail_open_all_fail() {
 	);
 }
 
-#[test]
-fn mcp_local_ratelimit() { crate::mcp::tests::block_on_big_stack(mcp_local_ratelimit_inner_body()) }
-async fn mcp_local_ratelimit_inner_body() {
+#[tokio::test]
+async fn mcp_local_ratelimit() {
 	let mock = mock_streamable_http_server(true).await;
 	let mut t = setup_proxy_test("{}")
 		.unwrap()
@@ -3147,9 +3026,8 @@ async fn mcp_local_ratelimit_inner_body() {
 	assert!(result3.is_err(), "Third request should be rate limited");
 }
 
-#[test]
-fn mcp_extauth_deny() { crate::mcp::tests::block_on_big_stack(mcp_extauth_deny_inner_body()) }
-async fn mcp_extauth_deny_inner_body() {
+#[tokio::test]
+async fn mcp_extauth_deny() {
 	struct DenyAllAuthz;
 
 	#[async_trait::async_trait]
@@ -3211,12 +3089,11 @@ async fn try_mcp_streamable_client(
 		Implementation::new("test client".to_string(), "0.0.1".to_string()),
 	);
 
-	Box::pin(client_info.serve(transport)).await
+	client_info.serve(transport).await
 }
 
-#[test]
-fn mcp_remote_ratelimit_deny() { crate::mcp::tests::block_on_big_stack(mcp_remote_ratelimit_deny_inner_body()) }
-async fn mcp_remote_ratelimit_deny_inner_body() {
+#[tokio::test]
+async fn mcp_remote_ratelimit_deny() {
 	struct DenyAllRateLimit;
 
 	#[async_trait::async_trait]
@@ -3414,9 +3291,8 @@ mod guardrails_test_support {
 
 // ============================== mcpGuardrails tests ===============================
 
-#[test]
-fn mcp_guardrails_pass_through() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_pass_through_inner_body()) }
-async fn mcp_guardrails_pass_through_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_pass_through() {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request, pass_response};
@@ -3464,9 +3340,8 @@ async fn mcp_guardrails_pass_through_inner_body() {
 	assert!(resp_n.load(Ordering::SeqCst) >= 1);
 }
 
-#[test]
-fn mcp_guardrails_reject_surfaces_jsonrpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_reject_surfaces_jsonrpc_error_inner_body()) }
-async fn mcp_guardrails_reject_surfaces_jsonrpc_error_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_reject_surfaces_jsonrpc_error() {
 	use protos::ext_mcp::authorization_error::Code;
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response, reject_request};
@@ -3927,9 +3802,8 @@ async fn mcp_guardrails_denies_tool_by_name() {
 	assert!(!result.content.is_empty(), "echo should return content");
 }
 
-#[test]
-fn mcp_guardrails_mutated_request_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_request_reaches_upstream_inner_body()) }
-async fn mcp_guardrails_mutated_request_reaches_upstream_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_mutated_request_reaches_upstream() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_request_json, pass_request, pass_response,
 	};
@@ -3979,9 +3853,8 @@ async fn mcp_guardrails_mutated_request_reaches_upstream_inner_body() {
 	assert!(text.contains("\"ratio\":2.5"), "got: {text}");
 }
 
-#[test]
-fn mcp_guardrails_metadata_cel_evaluated_per_request() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_cel_evaluated_per_request_inner_body()) }
-async fn mcp_guardrails_metadata_cel_evaluated_per_request_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_metadata_cel_evaluated_per_request() {
 	use std::collections::HashMap;
 	use std::sync::Mutex as StdMutex;
 
@@ -4043,9 +3916,8 @@ async fn mcp_guardrails_metadata_cel_evaluated_per_request_inner_body() {
 
 // mcpGuardrails returns metadata in its request result; an MCP authorization rule then
 // denies a tool based on that metadata (the inbound metadata -> CEL authz path).
-#[test]
-fn mcp_guardrails_metadata_consumed_by_authz() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_consumed_by_authz_inner_body()) }
-async fn mcp_guardrails_metadata_consumed_by_authz_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_metadata_consumed_by_authz() {
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request_with, pass_response};
 
 	let extmcp_mock = closure_mock(
@@ -4097,9 +3969,8 @@ async fn mcp_guardrails_metadata_consumed_by_authz_inner_body() {
 }
 
 // Simiilar to mcp_guardrails_metadata_consumed_by_authz but for the fanout path.
-#[test]
-fn mcp_guardrails_metadata_consumed_by_list_authz() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_metadata_consumed_by_list_authz_inner_body()) }
-async fn mcp_guardrails_metadata_consumed_by_list_authz_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_metadata_consumed_by_list_authz() {
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request_with, pass_response};
 
 	let extmcp_mock = closure_mock(
@@ -4159,9 +4030,8 @@ async fn mcp_guardrails_metadata_consumed_by_list_authz_inner_body() {
 	);
 }
 
-#[test]
-fn mcp_guardrails_filtered_list_via_response_mutation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_filtered_list_via_response_mutation_inner_body()) }
-async fn mcp_guardrails_filtered_list_via_response_mutation_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_filtered_list_via_response_mutation() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_response_json, pass_request, pass_response,
 	};
@@ -4204,9 +4074,8 @@ async fn mcp_guardrails_filtered_list_via_response_mutation_inner_body() {
 // Fanout (multi-backend) runs the response hook ONCE on the merged, muxed result
 // rather than once per upstream: the processor sees a single checkResponse carrying
 // the prefixed (`a_echo`, `b_echo`) tools and every backend in service_names.
-#[test]
-fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fanout_runs_once_on_merged_muxed_result_inner_body()) }
-async fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result() {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::sync::{Arc, Mutex};
 
@@ -4299,9 +4168,8 @@ async fn mcp_guardrails_fanout_runs_once_on_merged_muxed_result_inner_body() {
 
 // A mutated `tools/call` result must round-trip back through `ServerResult` and
 // reach the client (the `*/list` case above exercises a different variant).
-#[test]
-fn mcp_guardrails_mutated_tool_call_response_reaches_client() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_tool_call_response_reaches_client_inner_body()) }
-async fn mcp_guardrails_mutated_tool_call_response_reaches_client_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_mutated_tool_call_response_reaches_client() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_response_json, pass_request, pass_response,
 	};
@@ -4346,9 +4214,8 @@ async fn mcp_guardrails_mutated_tool_call_response_reaches_client_inner_body() {
 	assert!(!text.contains("world"));
 }
 
-#[test]
-fn mcp_guardrails_fail_open_on_grpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fail_open_on_grpc_error_inner_body()) }
-async fn mcp_guardrails_fail_open_on_grpc_error_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_fail_open_on_grpc_error() {
 	use std::collections::HashMap;
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
@@ -4385,9 +4252,8 @@ async fn mcp_guardrails_fail_open_on_grpc_error_inner_body() {
 	assert!(text.contains("\"hi\"") && text.contains("\"world\""));
 }
 
-#[test]
-fn mcp_guardrails_fail_closed_on_grpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_fail_closed_on_grpc_error_inner_body()) }
-async fn mcp_guardrails_fail_closed_on_grpc_error_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_fail_closed_on_grpc_error() {
 	use std::collections::HashMap;
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
@@ -4435,9 +4301,8 @@ async fn mcp_guardrails_fail_closed_on_grpc_error_inner_body() {
 	);
 }
 
-#[test]
-fn mcp_guardrails_response_reject_surfaces_jsonrpc_error() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_response_reject_surfaces_jsonrpc_error_inner_body()) }
-async fn mcp_guardrails_response_reject_surfaces_jsonrpc_error_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_response_reject_surfaces_jsonrpc_error() {
 	use protos::ext_mcp::authorization_error::Code;
 
 	use crate::test_helpers::extmcpmock::{
@@ -4484,9 +4349,8 @@ async fn mcp_guardrails_response_reject_surfaces_jsonrpc_error_inner_body() {
 	assert_eq!(e.message.as_ref(), "blocked on response");
 }
 
-#[test]
-fn mcp_guardrails_protocol_violation_fails_closed() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_protocol_violation_fails_closed_inner_body()) }
-async fn mcp_guardrails_protocol_violation_fails_closed_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_protocol_violation_fails_closed() {
 	use crate::mcp::guardrails::wire;
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
 
@@ -4543,9 +4407,8 @@ async fn mcp_guardrails_protocol_violation_fails_closed_inner_body() {
 	);
 }
 
-#[test]
-fn mcp_guardrails_non_object_mutation_is_protocol_violation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_non_object_mutation_is_protocol_violation_inner_body()) }
-async fn mcp_guardrails_non_object_mutation_is_protocol_violation_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_non_object_mutation_is_protocol_violation() {
 	use crate::test_helpers::extmcpmock::{closure_mock, mutated_request_json, pass_response};
 
 	// Mutated payloads must parse as the method's params; valid-but-wrong-shape
@@ -4589,9 +4452,8 @@ async fn mcp_guardrails_non_object_mutation_is_protocol_violation_inner_body() {
 	);
 }
 
-#[test]
-fn mcp_guardrails_header_mutation_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_header_mutation_reaches_upstream_inner_body()) }
-async fn mcp_guardrails_header_mutation_reaches_upstream_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_header_mutation_reaches_upstream() {
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request_with, pass_response};
 
 	let extmcp_mock = closure_mock(
@@ -4648,9 +4510,8 @@ async fn mcp_guardrails_header_mutation_reaches_upstream_inner_body() {
 	);
 }
 
-#[test]
-fn mcp_guardrails_request_headers_visible_to_policy_server() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_request_headers_visible_to_policy_server_inner_body()) }
-async fn mcp_guardrails_request_headers_visible_to_policy_server_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_request_headers_visible_to_policy_server() {
 	use std::sync::Mutex as StdMutex;
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_request, pass_response};
@@ -4704,9 +4565,8 @@ async fn mcp_guardrails_request_headers_visible_to_policy_server_inner_body() {
 }
 
 // mcpGuardrails processor metadata is readable as `guardrails.*` in an upstream-leg transformation.
-#[test]
-fn mcp_guardrails_request_metadata_usable_in_backend_transformation() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_request_metadata_usable_in_backend_transformation_inner_body()) }
-async fn mcp_guardrails_request_metadata_usable_in_backend_transformation_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_request_metadata_usable_in_backend_transformation() {
 	use crate::http::transformation_cel::{
 		LocalTransform, LocalTransformationConfig, Transformation,
 	};
@@ -4770,9 +4630,8 @@ async fn mcp_guardrails_request_metadata_usable_in_backend_transformation_inner_
 	);
 }
 
-#[test]
-fn mcp_guardrails_mutated_prompt_request_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_prompt_request_reaches_upstream_inner_body()) }
-async fn mcp_guardrails_mutated_prompt_request_reaches_upstream_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_mutated_prompt_request_reaches_upstream() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_request_json, pass_request, pass_response,
 	};
@@ -4826,9 +4685,8 @@ async fn mcp_guardrails_mutated_prompt_request_reaches_upstream_inner_body() {
 	assert!(!text.contains("original-message"));
 }
 
-#[test]
-fn mcp_guardrails_mutated_resource_read_reaches_upstream() { crate::mcp::tests::block_on_big_stack(mcp_guardrails_mutated_resource_read_reaches_upstream_inner_body()) }
-async fn mcp_guardrails_mutated_resource_read_reaches_upstream_inner_body() {
+#[tokio::test]
+async fn mcp_guardrails_mutated_resource_read_reaches_upstream() {
 	use crate::test_helpers::extmcpmock::{
 		closure_mock, mutated_request_json, pass_request, pass_response,
 	};
@@ -5031,9 +4889,8 @@ fn merge_tools_auth_on_upstream_rename_invisible_to_cel() {
 	assert_eq!(names, vec!["echo_renamed"]);
 }
 
-#[test]
-fn flat_resolve_tool_call_uses_tools_list_route_index() { crate::mcp::tests::block_on_big_stack(flat_resolve_tool_call_uses_tools_list_route_index_inner_body()) }
-async fn flat_resolve_tool_call_uses_tools_list_route_index_inner_body() {
+#[tokio::test]
+async fn flat_resolve_tool_call_uses_tools_list_route_index() {
 	use std::borrow::Cow;
 	use std::sync::Arc;
 
@@ -5116,11 +4973,8 @@ async fn flat_resolve_tool_call_uses_tools_list_route_index_inner_body() {
 	assert_eq!(upstream, "echo");
 }
 
-#[test]
-fn flat_resolve_prompt_call_uses_prompts_list_route_index() {
-	crate::mcp::tests::block_on_big_stack(flat_resolve_prompt_call_uses_prompts_list_route_index_inner_body())
-}
-async fn flat_resolve_prompt_call_uses_prompts_list_route_index_inner_body() {
+#[tokio::test]
+async fn flat_resolve_prompt_call_uses_prompts_list_route_index() {
 	use rmcp::model::{ListPromptsResult, Prompt, ServerResult};
 
 	let federation = crate::mcp::rewrite::McpRewritePolicy::flat_server();
@@ -5187,9 +5041,8 @@ async fn flat_resolve_prompt_call_uses_prompts_list_route_index_inner_body() {
 /// drop the entry from `build_flat_tool_route_index` (on collision) or fall
 /// through to the broken pass-through fallback and return "ambiguous flat tool
 /// name" because the three rewrite-less targets each contributed a hit.
-#[test]
-fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation() { crate::mcp::tests::block_on_big_stack(flat_resolve_tool_call_routes_unique_name_in_four_target_federation_inner_body()) }
-async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation_inner_body() {
+#[tokio::test]
+async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation() {
 	use std::borrow::Cow;
 	use std::sync::Arc;
 
@@ -5326,9 +5179,8 @@ async fn flat_resolve_tool_call_routes_unique_name_in_four_target_federation_inn
 /// clones each export `echo`), the user-visible `tools/list` keeps the first
 /// via `filter_flat_tool_collisions`, but the route index used to *remove*
 /// both, making the visible name unroutable.
-#[test]
-fn flat_route_index_first_wins_keeps_colliding_name_callable() { crate::mcp::tests::block_on_big_stack(flat_route_index_first_wins_keeps_colliding_name_callable_inner_body()) }
-async fn flat_route_index_first_wins_keeps_colliding_name_callable_inner_body() {
+#[tokio::test]
+async fn flat_route_index_first_wins_keeps_colliding_name_callable() {
 	use std::borrow::Cow;
 	use std::sync::Arc;
 
@@ -5401,9 +5253,8 @@ async fn flat_route_index_first_wins_keeps_colliding_name_callable_inner_body() 
 	assert_eq!(upstream, "echo");
 }
 
-#[test]
-fn resolve_tool_call_maps_exposed_to_upstream() { crate::mcp::tests::block_on_big_stack(resolve_tool_call_maps_exposed_to_upstream_inner_body()) }
-async fn resolve_tool_call_maps_exposed_to_upstream_inner_body() {
+#[tokio::test]
+async fn resolve_tool_call_maps_exposed_to_upstream() {
 	let rewrite = crate::mcp::rewrite::McpRewritePolicy::single_tool_rename("echo", "echo_renamed");
 	let relay = Relay::new(
 		McpBackendGroup {
@@ -5810,9 +5661,8 @@ fn flat_merge_tasks_preserves_create_recorded_route() {
 	assert_eq!(upstream, "job-from-b");
 }
 
-#[test]
-fn ensure_flat_task_routes_loaded_noop_when_index_populated() { crate::mcp::tests::block_on_big_stack(ensure_flat_task_routes_loaded_noop_when_index_populated_inner_body()) }
-async fn ensure_flat_task_routes_loaded_noop_when_index_populated_inner_body() {
+#[tokio::test]
+async fn ensure_flat_task_routes_loaded_noop_when_index_populated() {
 	use crate::mcp::upstream::IncomingRequestContext;
 	use rmcp::model::{ListTasksResult, ServerResult, Task, TaskStatus};
 
@@ -6077,7 +5927,8 @@ mod adobe_mcp_apps_integration {
 				),
 			),
 		];
-		let _ = merge_fn(results, &empty_cel()).unwrap();
+		let cel = crate::mcp::rbac::CelExecWrapper::new(::http::Request::builder().uri("http://example.com/").body(()).unwrap());
+	let _ = merge_fn(results, &cel).unwrap();
 
 		let all = relay.all_target_names();
 		let task_targets = relay.capabilities.upstreams_with_tasks(&all);
@@ -6117,9 +5968,8 @@ mod adobe_mcp_apps_integration {
 		assert!(ltr.tasks.is_empty());
 	}
 
-	#[test]
-	fn send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse() { crate::mcp::tests::block_on_big_stack(send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse_inner_body()) }
-	async fn send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse_inner_body() {
+	#[tokio::test]
+	async fn send_fanout_to_with_zero_matching_targets_returns_empty_tasks_via_sse() {
 		let relay = Relay::new(
 			McpBackendGroup {
 				targets: vec![
@@ -6135,6 +5985,12 @@ mod adobe_mcp_apps_integration {
 			},
 		)
 		.unwrap();
+		let _cel = crate::mcp::rbac::CelExecWrapper::new(
+			::http::Request::builder()
+				.uri("http://example.com/mcp")
+				.body(())
+				.unwrap(),
+		);
 		let merge = relay.merge_tasks();
 		let targets: Vec<String> = vec![];
 		let req = JsonRpcRequest::new(
@@ -6156,9 +6012,8 @@ mod adobe_mcp_apps_integration {
 		assert!(tasks.is_empty(), "expected empty task list, got {v}");
 	}
 
-	#[test]
-	fn multiplex_read_resource_round_trips_federated_uri() { crate::mcp::tests::block_on_big_stack(multiplex_read_resource_round_trips_federated_uri_inner_body()) }
-	async fn multiplex_read_resource_round_trips_federated_uri_inner_body() {
+	#[tokio::test]
+	async fn multiplex_read_resource_round_trips_federated_uri() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6191,9 +6046,8 @@ mod adobe_mcp_apps_integration {
 		);
 	}
 
-	#[test]
-	fn multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream() { crate::mcp::tests::block_on_big_stack(multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream_inner_body()) }
-	async fn multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream_inner_body() {
+	#[tokio::test]
+	async fn multiplex_subscribe_unsubscribe_unwraps_resource_uri_for_upstream() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6222,9 +6076,8 @@ mod adobe_mcp_apps_integration {
 			.expect("unsubscribe");
 	}
 
-	#[test]
-	fn multiplex_call_tool_wraps_ui_resource_uri_in_response_meta() { crate::mcp::tests::block_on_big_stack(multiplex_call_tool_wraps_ui_resource_uri_in_response_meta_inner_body()) }
-	async fn multiplex_call_tool_wraps_ui_resource_uri_in_response_meta_inner_body() {
+	#[tokio::test]
+	async fn multiplex_call_tool_wraps_ui_resource_uri_in_response_meta() {
 		// Without wrapping the call-tool response's `_meta.ui.resourceUri`, the host
 		// receives the upstream-native `ui://...` and a subsequent `resources/read`
 		// fails the multiplex parser with "missing 'u' query param". This regression
@@ -6279,9 +6132,8 @@ mod adobe_mcp_apps_integration {
 		assert_eq!((t2, o2), (target.clone(), original.clone()));
 	}
 
-	#[test]
-	fn multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content() { crate::mcp::tests::block_on_big_stack(multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content_inner_body()) }
-	async fn multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content_inner_body() {
+	#[tokio::test]
+	async fn multiplex_call_tool_wraps_ui_resource_uri_in_embedded_content() {
 		// A2UI sample tools return `ui://...` via EmbeddedResource content blocks rather than
 		// `_meta.ui.resourceUri`. Without wrapping, federated `resources/read` fails multiplex parsing.
 		let mock_a = mock_streamable_http_server(true).await;
@@ -6323,9 +6175,8 @@ mod adobe_mcp_apps_integration {
 		assert_eq!(original, "ui://basic/app");
 	}
 
-	#[test]
-	fn multiplex_initialize_advertises_prompts_capability() { crate::mcp::tests::block_on_big_stack(multiplex_initialize_advertises_prompts_capability_inner_body()) }
-	async fn multiplex_initialize_advertises_prompts_capability_inner_body() {
+	#[tokio::test]
+	async fn multiplex_initialize_advertises_prompts_capability() {
 		// MCP Apps hosts (e.g. MCP Inspector) gate prompt UI on the server advertising
 		// the `prompts` capability. Since the gateway multiplexes prompt names via the
 		// `target_` prefix, prompts are safely federated and must be advertised even
@@ -6360,9 +6211,8 @@ mod adobe_mcp_apps_integration {
 		);
 	}
 
-	#[test]
-	fn multiplex_initialize_advertises_full_tasks_capability() { crate::mcp::tests::block_on_big_stack(multiplex_initialize_advertises_full_tasks_capability_inner_body()) }
-	async fn multiplex_initialize_advertises_full_tasks_capability_inner_body() {
+	#[tokio::test]
+	async fn multiplex_initialize_advertises_full_tasks_capability() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6400,9 +6250,8 @@ mod adobe_mcp_apps_integration {
 		);
 	}
 
-	#[test]
-	fn multiplex_tasks_merge_list_get_and_cancel_unwrap_ids() { crate::mcp::tests::block_on_big_stack(multiplex_tasks_merge_list_get_and_cancel_unwrap_ids_inner_body()) }
-	async fn multiplex_tasks_merge_list_get_and_cancel_unwrap_ids_inner_body() {
+	#[tokio::test]
+	async fn multiplex_tasks_merge_list_get_and_cancel_unwrap_ids() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6479,9 +6328,8 @@ mod adobe_mcp_apps_integration {
 		assert_eq!(custom.0, json!({"done": true}));
 	}
 
-	#[test]
-	fn multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps() { crate::mcp::tests::block_on_big_stack(multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps_inner_body()) }
-	async fn multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps_inner_body() {
+	#[tokio::test]
+	async fn multiplex_tools_call_create_task_wraps_id_and_tasks_get_unwraps() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6864,9 +6712,8 @@ mod federated_elicitation_tests {
 	// after initialize (the same path production MCP clients use). Server-initiated
 	// requests such as elicitation/create are delivered on that GET fanout, not via a
 	// gateway-owned background upstream GET.
-	#[test]
-	fn federated_elicitation_round_trip_completes() { crate::mcp::tests::block_on_big_stack(federated_elicitation_round_trip_completes_inner_body()) }
-	async fn federated_elicitation_round_trip_completes_inner_body() {
+	#[tokio::test]
+	async fn federated_elicitation_round_trip_completes() {
 		let elicit = mock_elicitation_server().await;
 		let plain = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6918,9 +6765,8 @@ mod federated_elicitation_tests {
 		);
 	}
 
-	#[test]
-	fn federated_elicitation_decline_round_trip() { crate::mcp::tests::block_on_big_stack(federated_elicitation_decline_round_trip_inner_body()) }
-	async fn federated_elicitation_decline_round_trip_inner_body() {
+	#[tokio::test]
+	async fn federated_elicitation_decline_round_trip() {
 		let elicit = mock_elicitation_server().await;
 		let plain = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6949,9 +6795,8 @@ mod federated_elicitation_tests {
 		assert_eq!(result.content[0].raw.as_text().unwrap().text, "declined");
 	}
 
-	#[test]
-	fn federated_elicitation_cancel_round_trip() { crate::mcp::tests::block_on_big_stack(federated_elicitation_cancel_round_trip_inner_body()) }
-	async fn federated_elicitation_cancel_round_trip_inner_body() {
+	#[tokio::test]
+	async fn federated_elicitation_cancel_round_trip() {
 		let elicit = mock_elicitation_server().await;
 		let plain = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -6980,9 +6825,8 @@ mod federated_elicitation_tests {
 		assert_eq!(result.content[0].raw.as_text().unwrap().text, "cancelled");
 	}
 
-	#[test]
-	fn federated_tools_call_cancel_routes_to_single_upstream() { crate::mcp::tests::block_on_big_stack(federated_tools_call_cancel_routes_to_single_upstream_inner_body()) }
-	async fn federated_tools_call_cancel_routes_to_single_upstream_inner_body() {
+	#[tokio::test]
+	async fn federated_tools_call_cancel_routes_to_single_upstream() {
 		let started = Arc::new(tokio::sync::Notify::new());
 		let tool_cancelled = Arc::new(tokio::sync::Notify::new());
 		let call_id = Arc::new(Mutex::new(None));
@@ -7195,9 +7039,8 @@ mod federated_progress_tests {
 		(running, seen)
 	}
 
-	#[test]
-	fn federated_progress_relayed_unchanged() { crate::mcp::tests::block_on_big_stack(federated_progress_relayed_unchanged_inner_body()) }
-	async fn federated_progress_relayed_unchanged_inner_body() {
+	#[tokio::test]
+	async fn federated_progress_relayed_unchanged() {
 		let progress = mock_progress_server().await;
 		let plain = mock_streamable_http_server(true).await;
 		let t = setup_proxy_test("{}")
@@ -7254,9 +7097,8 @@ mod histogram_tests {
 	const HIST: &str = "agentgateway_mcp_request_duration_seconds";
 
 	/// I1 - single tools/call against a single-target MCP backend.
-	#[test]
-	fn histogram_records_single_tools_call() { crate::mcp::tests::block_on_big_stack(histogram_records_single_tools_call_inner_body()) }
-	async fn histogram_records_single_tools_call_inner_body() {
+	#[tokio::test]
+	async fn histogram_records_single_tools_call() {
 		let mock = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -7302,9 +7144,8 @@ mod histogram_tests {
 
 	/// I2 - federated MCP backend; two servers must produce two distinct series.
 	/// This is the central story-validating test.
-	#[test]
-	fn histogram_breaks_down_by_server_in_federation() { crate::mcp::tests::block_on_big_stack(histogram_breaks_down_by_server_in_federation_inner_body()) }
-	async fn histogram_breaks_down_by_server_in_federation_inner_body() {
+	#[tokio::test]
+	async fn histogram_breaks_down_by_server_in_federation() {
 		let mock_a = mock_streamable_http_server(true).await;
 		let mock_b = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
@@ -7342,29 +7183,33 @@ mod histogram_tests {
 		assert!(
 			out
 				.lines()
-				.any(|l| l.starts_with(&format!("{HIST}_count{{")) && l.contains(r#"server="server-a""#)),
-			"no `server=\"server-a\"` _count line; got:\n{out}"
+				.any(|l| l.starts_with(&format!("{HIST}_count{{"))
+					&& l.contains(r#"server="mcp""#)
+					&& l.contains(r#"target="server-a""#)),
+			"no server=\"mcp\" target=\"server-a\" _count line; got:\n{out}"
 		);
 		assert!(
 			out
 				.lines()
-				.any(|l| l.starts_with(&format!("{HIST}_count{{")) && l.contains(r#"server="server-b""#)),
-			"no `server=\"server-b\"` _count line; got:\n{out}"
+				.any(|l| l.starts_with(&format!("{HIST}_count{{"))
+					&& l.contains(r#"server="mcp""#)
+					&& l.contains(r#"target="server-b""#)),
+			"no server=\"mcp\" target=\"server-b\" _count line; got:\n{out}"
 		);
 	}
 
 	/// I3 - protocol methods (initialize/tools/list/notifications/initialized) show up
-	/// with `server="unknown"`, matching the existing mcp_requests counter.
-	#[test]
-	fn histogram_observes_non_tools_call_methods() { crate::mcp::tests::block_on_big_stack(histogram_observes_non_tools_call_methods_inner_body()) }
-	async fn histogram_observes_non_tools_call_methods_inner_body() {
+	/// with `target="unknown"` and `server="mcp"` (the backend group name), matching
+	/// the existing mcp_requests counter.
+	#[tokio::test]
+	async fn histogram_observes_non_tools_call_methods() {
 		let mock = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
 			.unwrap()
-			.with_mcp_backend(mock.addr, true, false)
+			.with_multiplex_mcp_backend("mcp", vec![("server-a", mock.addr, false)], true)
 			.with_bind(simple_bind())
-			.with_route(basic_route(mock.addr));
-		let io = t.serve_real_listener(BIND_KEY).await;
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
 		let client = mcp_streamable_client(io).await;
 
 		// `serve(transport)` already triggers `initialize` + `notifications/initialized`.
@@ -7376,22 +7221,22 @@ mod histogram_tests {
 			.lines()
 			.filter(|l| l.starts_with(&format!("{HIST}_count{{")))
 			.any(|l| {
-				l.contains(r#"server="unknown""#)
+				l.contains(r#"target="unknown""#)
+					&& l.contains(r#"server="mcp""#)
 					&& (l.contains(r#"method="initialize""#)
 						|| l.contains(r#"method="tools/list""#)
 						|| l.contains(r#"method="notifications/initialized""#))
 			});
 		assert!(
 			has_protocol_method,
-			"no protocol-method series with server=\"unknown\"; got:\n{out}"
+			"no protocol-method series with target=\"unknown\" server=\"mcp\"; got:\n{out}"
 		);
 	}
 
 	/// I4 - opening an SSE stream without sending any JSON-RPC must NOT emit a histogram
 	/// series. Distinguishes the new histogram from the broader HTTP request_duration.
-	#[test]
-	fn histogram_excludes_sse_bootstrap_get() { crate::mcp::tests::block_on_big_stack(histogram_excludes_sse_bootstrap_get_inner_body()) }
-	async fn histogram_excludes_sse_bootstrap_get_inner_body() {
+	#[tokio::test]
+	async fn histogram_excludes_sse_bootstrap_get() {
 		use std::time::Duration;
 
 		let mock = mock_streamable_http_server(true).await;
@@ -7427,9 +7272,8 @@ mod histogram_tests {
 
 	/// I5 - when the upstream returns an error, the histogram still observes the call.
 	/// Validates analysis §5.3.
-	#[test]
-	fn histogram_observes_upstream_error_latency() { crate::mcp::tests::block_on_big_stack(histogram_observes_upstream_error_latency_inner_body()) }
-	async fn histogram_observes_upstream_error_latency_inner_body() {
+	#[tokio::test]
+	async fn histogram_observes_upstream_error_latency() {
 		let dead: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -7471,9 +7315,8 @@ mod histogram_tests {
 
 	/// I6 - for the same MCPCall label set, `mcp_request_duration_seconds_count` must
 	/// match `mcp_requests_total`. Regression guard against the two call sites diverging.
-	#[test]
-	fn histogram_count_matches_counter_for_same_label_set() { crate::mcp::tests::block_on_big_stack(histogram_count_matches_counter_for_same_label_set_inner_body()) }
-	async fn histogram_count_matches_counter_for_same_label_set_inner_body() {
+	#[tokio::test]
+	async fn histogram_count_matches_counter_for_same_label_set() {
 		let mock = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -7516,9 +7359,8 @@ mod histogram_tests {
 	}
 
 	/// I7 - one fast call + one slow call; the `le="0.01"` bucket holds 1, `le="0.5"` holds 2.
-	#[test]
-	fn histogram_bucket_distribution_matches_observation() { crate::mcp::tests::block_on_big_stack(histogram_bucket_distribution_matches_observation_inner_body()) }
-	async fn histogram_bucket_distribution_matches_observation_inner_body() {
+	#[tokio::test]
+	async fn histogram_bucket_distribution_matches_observation() {
 		use std::time::Duration;
 
 		let fast = mock_streamable_http_server(true).await;
@@ -7587,9 +7429,8 @@ mod histogram_tests {
 	}
 
 	/// I8 - the histogram carries the flattened RouteIdentifier (bind/gateway/listener/route/route_rule).
-	#[test]
-	fn histogram_carries_full_route_identifier_labels() { crate::mcp::tests::block_on_big_stack(histogram_carries_full_route_identifier_labels_inner_body()) }
-	async fn histogram_carries_full_route_identifier_labels_inner_body() {
+	#[tokio::test]
+	async fn histogram_carries_full_route_identifier_labels() {
 		let mock = mock_streamable_http_server(true).await;
 		let t = setup_with_registry("{}")
 			.unwrap()
@@ -7624,9 +7465,8 @@ mod histogram_tests {
 
 	/// I9 - a request that finalises with no MCP context attached must produce
 	/// neither `mcp_requests_total` nor `mcp_request_duration_seconds`.
-	#[test]
-	fn histogram_silent_when_mcp_context_absent() { crate::mcp::tests::block_on_big_stack(histogram_silent_when_mcp_context_absent_inner_body()) }
-	async fn histogram_silent_when_mcp_context_absent_inner_body() {
+	#[tokio::test]
+	async fn histogram_silent_when_mcp_context_absent() {
 		use std::time::Duration;
 
 		let t = setup_with_registry("{}").unwrap().with_bind(simple_bind());
@@ -7654,19 +7494,411 @@ mod histogram_tests {
 	}
 }
 
+#[cfg(feature = "adobe")]
+mod upstream_error_tests {
+	use std::sync::Arc;
 
-/// Run an async test body on a runtime with a large worker-thread stack.
-///
-/// Adobe MCP integration tests stack many async layers (rmcp client, proxy,
-/// stateless-initialize wrapper, upstream streamable client, mock server) in one
-/// flow; under `--features adobe` the combined future state overflows libtest's
-/// default per-test thread stack. An explicit 8 MiB-stack runtime keeps these
-/// tests exercising the real path. Production uses its own runtime and is unaffected.
-fn block_on_big_stack<F: std::future::Future>(f: F) -> F::Output {
-	tokio::runtime::Builder::new_multi_thread()
-		.enable_all()
-		.thread_stack_size(8 * 1024 * 1024)
-		.build()
-		.unwrap()
-		.block_on(f)
+	use agent_core::strng;
+	use rmcp::model::CallToolRequestParams;
+	use serde_json::json;
+
+	use super::*;
+	use crate::http::authorization::{PolicySet, RuleSet};
+	use crate::mcp::McpAuthorization;
+	use crate::test_helpers::adobe_proxymock::setup_with_registry;
+	use crate::test_helpers::proxymock::{BIND_KEY, basic_named_route, basic_route, simple_bind};
+	use crate::types::agent::BackendTrafficPolicy;
+
+	const CTR: &str = "agentgateway_mcp_upstream_errors_total";
+
+	/// True if some `mcp_upstream_errors_total` series matches every `needle`
+	/// label fragment and has a nonzero value.
+	fn has_nonzero_series(out: &str, needles: &[&str]) -> bool {
+		out.lines().any(|l| {
+			l.starts_with(CTR) && needles.iter().all(|n| l.contains(n)) && !l.trim_end().ends_with(" 0")
+		})
+	}
+
+	/// U2 — single-target `tools/call` whose upstream returns HTTP 502 increments
+	/// the counter with `error_type="http_5xx"`. Also asserts §10 parity: the
+	/// existing `mcp_requests_total` still counts the failed call.
+	#[tokio::test]
+	async fn counts_http_5xx_on_tools_call() {
+		let mock =
+			mock_streamable_http_server_failing_tools_call(::http::StatusCode::BAD_GATEWAY).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+
+		let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+			let handle = tokio::task::spawn(async move {
+				let client = mcp_streamable_client(io).await;
+				let _ = client
+					.call_tool(
+						CallToolRequestParams::new("echo")
+							.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+					)
+					.await;
+			});
+			let _ = handle.await;
+		})
+		.await;
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+		assert!(
+			has_nonzero_series(
+				&out,
+				&[r#"error_type="http_5xx""#, r#"method="tools/call""#]
+			),
+			"expected http_5xx tools/call series; got:\n{out}"
+		);
+		// §10 parity: the existing counter also records the failed call.
+		assert!(
+			out
+				.lines()
+				.any(|l| l.starts_with("agentgateway_mcp_requests_total")
+					&& l.contains(r#"method="tools/call""#)),
+			"expected mcp_requests_total tools/call series; got:\n{out}"
+		);
+	}
+
+	/// U3 — upstream HTTP 404 maps to `error_type="http_4xx"`.
+	#[tokio::test]
+	async fn counts_http_4xx_on_tools_call() {
+		let mock = mock_streamable_http_server_failing_tools_call(::http::StatusCode::NOT_FOUND).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+
+		let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+			let handle = tokio::task::spawn(async move {
+				let client = mcp_streamable_client(io).await;
+				let _ = client
+					.call_tool(
+						CallToolRequestParams::new("echo")
+							.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+					)
+					.await;
+			});
+			let _ = handle.await;
+		})
+		.await;
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+		assert!(
+			has_nonzero_series(
+				&out,
+				&[r#"error_type="http_4xx""#, r#"method="tools/call""#]
+			),
+			"expected http_4xx tools/call series; got:\n{out}"
+		);
+	}
+
+	/// U4 — label correctness in a federated setup: `server` is the AIBackend name
+	/// (`mcp`), `target` is the individual MCP server (`server-a`), `method="tools/call"`,
+	/// and the flattened RouteIdentifier labels are present.
+	#[tokio::test]
+	async fn labels_carry_individual_server_and_route() {
+		let mock =
+			mock_streamable_http_server_failing_tools_call(::http::StatusCode::BAD_GATEWAY).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend("mcp", vec![("server-a", mock.addr, false)], true)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+
+		let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+			let handle = tokio::task::spawn(async move {
+				let client = mcp_streamable_client(io).await;
+				let _ = client
+					.call_tool(
+						CallToolRequestParams::new("server-a_echo")
+							.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+					)
+					.await;
+			});
+			let _ = handle.await;
+		})
+		.await;
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+		let line = out
+			.lines()
+			.find(|l| {
+				l.starts_with(CTR)
+					&& l.contains(r#"server="mcp""#)
+					&& l.contains(r#"target="server-a""#)
+			})
+			.unwrap_or_else(|| {
+				panic!("no server=\"mcp\" target=\"server-a\" upstream-error series; got:\n{out}")
+			});
+		assert!(
+			line.contains(r#"method="tools/call""#),
+			"wrong method on `{line}`"
+		);
+		assert!(
+			line.contains(r#"error_type="http_5xx""#),
+			"wrong error_type on `{line}`"
+		);
+		for key in ["bind=", "gateway=", "listener=", "route=", "route_rule="] {
+			assert!(line.contains(key), "label `{key}` missing from `{line}`");
+		}
+	}
+
+	/// U1 — a NON-HTTP transport failure on a dispatched `tools/call` increments the
+	/// counter. The upstream completes `initialize` (establishing the session), then is
+	/// killed; the subsequent `tools/call` reaches `send_single_map_response` →
+	/// `generic_stream`, which fails with a transport `UpstreamError` (connection refused
+	/// / broken pipe ⇒ `proxy`/`recv`/`send`) and is counted with `method="tools/call"`.
+	/// The robust assertion is "some nonzero series with method=tools/call" — the exact
+	/// transport variant is pinned by the Task 2 classifier unit test.
+	///
+	/// NOTE: an upstream unreachable *from the start* fails during the `initialize`
+	/// fan-out (`session.rs` `send_fanout`), which is deliberately NOT instrumented
+	/// (spec §2 non-goal: fan-out failures are not counted) — so that case correctly does
+	/// NOT increment the counter. Only post-init single-target dispatch errors are counted.
+	#[tokio::test]
+	async fn counts_non_http_transport_failure() {
+		let mock = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+		// initialize succeeds against the healthy upstream
+		let client = mcp_streamable_client(io).await;
+
+		// Kill the upstream; the next dispatched tools/call fails at generic_stream.
+		drop(mock);
+		tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+		let _ = tokio::time::timeout(
+			std::time::Duration::from_secs(5),
+			client.call_tool(
+				CallToolRequestParams::new("echo")
+					.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+			),
+		)
+		.await;
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+		assert!(
+			has_nonzero_series(&out, &[r#"method="tools/call""#]),
+			"post-init upstream death did not increment mcp_upstream_errors for tools/call; got:\n{out}"
+		);
+	}
+
+	/// REPRO (ETHOS-110815 / verify-mcp-label-schema.sh MV-2): a FEDERATED backend
+	/// (two multiplex targets) establishes a stateful session against BOTH live
+	/// upstreams, then ONE target is killed and a `tools/call` is dispatched to the
+	/// DEAD target. This is exactly `counts_non_http_transport_failure` but
+	/// multi-target — the combination the live MV-2 check exercises, where it
+	/// currently produces `target="unknown"` and NO `mcp_upstream_errors_total`.
+	///
+	/// Asserts the two observable MV-2 failures as one in-process reproduction:
+	///   1. the duration histogram records `target="server-a"` (NOT `"unknown"`) —
+	///      i.e. `set_tool` took effect for the failed call;
+	///   2. `mcp_upstream_errors_total` is emitted with `server="mcp"`,
+	///      `target="server-a"`, `method="tools/call"`.
+	#[tokio::test]
+	async fn federation_dead_target_counts_and_labels() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("server-a", mock_a.addr, false),
+					("server-b", mock_b.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+		// initialize + notifications/initialized fan out to BOTH live upstreams here,
+		// establishing the stateful session with both targets in `by_name`.
+		let client = mcp_streamable_client(io).await;
+
+		// Kill server-a only; server-b stays alive (matches MV-2: kill mcp-server,
+		// keep mcp-server-airbnb).
+		drop(mock_a);
+		tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+		// Dispatch a single-target tools/call to the DEAD target.
+		let _ = tokio::time::timeout(
+			std::time::Duration::from_secs(5),
+			client.call_tool(
+				CallToolRequestParams::new("server-a_echo")
+					.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+			),
+		)
+		.await;
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+
+		// (1) histogram must record target="server-a", not "unknown" — proves
+		// set_tool took effect on the finalized cell for the failed call.
+		assert!(
+			out.lines().any(|l| l
+				.starts_with("agentgateway_mcp_request_duration_seconds_count{")
+				&& l.contains(r#"method="tools/call""#)
+				&& l.contains(r#"target="server-a""#)),
+			"duration histogram missing target=\"server-a\" for failed tools/call \
+			 (live regression shows target=\"unknown\"); got:\n{out}"
+		);
+
+		// (2) upstream errors counter must be emitted with backend + target labels.
+		assert!(
+			has_nonzero_series(
+				&out,
+				&[
+					r#"server="mcp""#,
+					r#"target="server-a""#,
+					r#"method="tools/call""#,
+				],
+			),
+			"federation dead-target tools/call did not emit mcp_upstream_errors_total \
+			 with server=mcp target=server-a method=tools/call; got:\n{out}"
+		);
+	}
+
+	/// U5 — an RBAC deny-all policy rejects the `tools/call` (`UpstreamError::Authorization`)
+	/// before `generic_stream`, so the counter must NOT be emitted.
+	#[tokio::test]
+	async fn rbac_denial_does_not_count() {
+		let mock = mock_streamable_http_server(true).await;
+		// Deny-all: no allow rules, one always-true deny rule (mirrors the existing
+		// `authorization_denied_returns_unknown_tool_error` test). `PolicySet::new`
+		// takes three rule vecs.
+		let deny_all_policy = McpAuthorization::new(RuleSet::new(PolicySet::new(
+			vec![], // allow
+			vec![Arc::new(
+				crate::cel::Expression::new_strict("true").unwrap(),
+			)], // deny all
+			vec![],
+		)));
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend_policies(
+				mock.addr,
+				true,
+				false,
+				vec![BackendTrafficPolicy::McpAuthorization(deny_all_policy)],
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+		let client = mcp_streamable_client(io).await;
+
+		let _ = client
+			.call_tool(
+				CallToolRequestParams::new("echo")
+					.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+			)
+			.await;
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+		assert!(
+			!out.contains(CTR),
+			"RBAC-denied call must not emit mcp_upstream_errors; got:\n{out}"
+		);
+	}
+
+	/// U6 — an unknown-service `tools/call` fails with `UpstreamError::InvalidRequest`
+	/// ("unknown service …"), which `send_single_map_response` returns **before** it ever
+	/// calls `generic_stream` (handler.rs `let Ok(us) = self.upstreams.get(service_name) else
+	/// { return Err(InvalidRequest(...)) }`). The stash runs only on the `generic_stream`
+	/// `Err` branch, so it never executes and the counter must stay absent. This pins the
+	/// instrumentation *placement* — a guarantee the Task 2 classifier unit test
+	/// (`InvalidRequest → None`) cannot give on its own.
+	///
+	/// **Two** healthy upstreams are required: a single-target multiplex sets
+	/// `default_target_name = Some(..)` (`upstream/mod.rs`, `targets.len() == 1` branch) and
+	/// routes the whole tool name to that one target — never producing an unknown-service
+	/// error. With two targets, `default_target_name` is `None`, so the `server-zzz_` prefix
+	/// is parsed and resolved against the upstream set, where it is unknown. (Same pattern as
+	/// the existing `stream_to_multiplex` test.)
+	#[tokio::test]
+	async fn unknown_service_does_not_count() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("server-a", mock_a.addr, false),
+					("server-b", mock_b.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+
+		let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+			let handle = tokio::task::spawn(async move {
+				let client = mcp_streamable_client(io).await;
+				// "server-zzz" is not a registered upstream ⇒ InvalidRequest("unknown service …").
+				let _ = client
+					.call_tool(
+						CallToolRequestParams::new("server-zzz_echo")
+							.with_arguments(json!({"x": 1}).as_object().cloned().unwrap()),
+					)
+					.await;
+			});
+			let _ = handle.await;
+		})
+		.await;
+		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+		let out = t.scrape_metrics();
+		assert!(
+			!out.contains(CTR),
+			"unknown-service InvalidRequest must not emit mcp_upstream_errors; got:\n{out}"
+		);
+	}
+
+	/// U7 — a happy-path 200 OK `tools/call` must NOT emit the counter.
+	#[tokio::test]
+	async fn happy_path_does_not_count() {
+		let mock = mock_streamable_http_server(true).await;
+		let t = setup_with_registry("{}")
+			.unwrap()
+			.with_mcp_backend(mock.addr, true, false)
+			.with_bind(simple_bind())
+			.with_route(basic_route(mock.addr));
+		let io = t.serve_real_listener(BIND_KEY).await;
+		let client = mcp_streamable_client(io).await;
+
+		let _ = client
+			.call_tool(
+				CallToolRequestParams::new("echo")
+					.with_arguments(json!({"hi": "world"}).as_object().cloned().unwrap()),
+			)
+			.await
+			.unwrap();
+
+		let out = t.scrape_metrics();
+		assert!(
+			!out.contains(CTR),
+			"successful call must not emit mcp_upstream_errors; got:\n{out}"
+		);
+	}
 }

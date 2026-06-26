@@ -55,7 +55,6 @@ impl TCPProxy {
 				self.inputs.cfg.metrics.clone(),
 			),
 			self.inputs.metrics.clone(),
-			self.inputs.model_catalog.clone(),
 			start,
 			tcp.clone(),
 		)

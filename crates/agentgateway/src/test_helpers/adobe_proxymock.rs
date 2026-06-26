@@ -9,7 +9,7 @@ use prometheus_client::registry::Registry;
 
 use crate::telemetry::metrics::Metrics;
 use crate::test_helpers::proxymock::{TestBind, setup_proxy_test};
-use crate::types::agent::{Bind, Route};
+use crate::types::agent::{BackendTrafficPolicy, Bind, Route};
 
 /// Drop-in replacement for `setup_proxy_test` that retains the Prometheus
 /// `Registry` backing `pi.metrics`. Adobe-only — keeps the shared
@@ -48,6 +48,21 @@ impl MetricsTestBind {
 	pub fn with_mcp_backend(self, b: SocketAddr, stateful: bool, legacy_sse: bool) -> Self {
 		Self {
 			tb: self.tb.with_mcp_backend(b, stateful, legacy_sse),
+			registry: self.registry,
+		}
+	}
+
+	pub fn with_mcp_backend_policies(
+		self,
+		b: SocketAddr,
+		stateful: bool,
+		legacy_sse: bool,
+		policies: Vec<BackendTrafficPolicy>,
+	) -> Self {
+		Self {
+			tb: self
+				.tb
+				.with_mcp_backend_policies(b, stateful, legacy_sse, policies),
 			registry: self.registry,
 		}
 	}

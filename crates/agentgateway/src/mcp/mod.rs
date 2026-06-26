@@ -18,7 +18,6 @@ mod session;
 mod sse;
 mod streamablehttp;
 mod upstream;
-
 use std::fmt::{Display, Write};
 use std::io;
 use std::sync::Arc;
@@ -34,6 +33,8 @@ use rmcp::model::RequestId;
 pub use router::App;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+#[cfg(feature = "adobe")]
+pub(crate) use upstream::UpstreamError;
 
 #[cfg(feature = "schema")]
 use crate::JsonSchema;
@@ -206,6 +207,21 @@ pub struct MCPInfo {
 	/// response/increment path when the terminal MCP result is known.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub is_error: Option<bool>,
+	/// Adobe-only: in-memory carrier for the `mcp_upstream_errors_total` metric.
+	/// Set by single-target dispatch on a classified upstream failure and read at
+	/// the `log.rs` finalize site. `#[serde(skip)]` keeps it out of serde, the CEL
+	/// `DynamicType` surface, and the JSON schema (the cel-derive macro treats
+	/// `#[serde(skip)]` as `#[dynamic(skip)]`), so there is no observable output
+	/// change — it is purely an internal metrics carrier.
+	#[cfg(feature = "adobe")]
+	#[serde(skip)]
+	pub upstream_error: Option<String>,
+	/// Adobe-only: in-memory carrier for the backend name label on MCP metrics.
+	/// Set at App::serve entry and read at the `log.rs` finalize site.
+	/// `#[serde(skip)]` keeps it out of serde, CEL `DynamicType`, and JSON schema.
+	#[cfg(feature = "adobe")]
+	#[serde(skip)]
+	pub backend_name: Option<String>,
 }
 
 impl MCPInfo {
@@ -313,6 +329,16 @@ impl MCPInfo {
 			tool.error = serde_json::to_value(error).ok();
 		}
 	}
+
+	#[cfg(feature = "adobe")]
+	pub fn set_upstream_error(&mut self, error_type: &str) {
+		self.upstream_error = Some(error_type.to_string());
+	}
+
+	#[cfg(feature = "adobe")]
+	pub fn set_backend_name(&mut self, name: &str) {
+		self.backend_name = Some(name.to_string());
+	}
 }
 
 impl From<&ResourceType> for MCPInfo {
@@ -387,5 +413,23 @@ mod mcp_info_semantics_tests {
 	#[test]
 	fn mcpoperation_task_display_is_task() {
 		assert_eq!(format!("{}", MCPOperation::Task), "task");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn set_upstream_error_sets_field() {
+		let mut m = MCPInfo::default();
+		assert_eq!(m.upstream_error, None);
+		m.set_upstream_error("http_5xx");
+		assert_eq!(m.upstream_error.as_deref(), Some("http_5xx"));
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn set_backend_name_sets_field() {
+		let mut m = MCPInfo::default();
+		assert_eq!(m.backend_name, None);
+		m.set_backend_name("mcp-federated");
+		assert_eq!(m.backend_name.as_deref(), Some("mcp-federated"));
 	}
 }

@@ -2148,6 +2148,10 @@ pub fn full_example_executor() -> ExecutorSerde {
 			resource: None,
 			task: None,
 			is_error: None,
+			#[cfg(feature = "adobe")]
+			upstream_error: None,
+			#[cfg(feature = "adobe")]
+			backend_name: None,
 		}),
 		backend: Some(BackendContext {
 			name: "my-backend".into(),

@@ -988,7 +988,12 @@ impl Session {
 		// the downstream client and route the client's JSON-RPC response upstream.
 		capabilities.roots = None;
 		capabilities.sampling = None;
-		capabilities.elicitation = None;
+		// Adobe has federated elicitation routing (forward_client_message_to_upstream +
+		// resolve_client_response_target), so preserve the capability in adobe builds.
+		#[cfg(not(feature = "adobe"))]
+		{
+			capabilities.elicitation = None;
+		}
 	}
 }
 

@@ -116,6 +116,8 @@ impl App {
 		// Store an empty value, we will populate each field async
 		let logy = log.mcp_status.clone();
 		logy.store(Some(MCPInfo::default()));
+		#[cfg(feature = "adobe")]
+		logy.non_atomic_mutate(|i| i.set_backend_name(backend_group_name.name.as_str()));
 		req.extensions_mut().insert(logy);
 		let tracer = log.span_writer();
 		req.extensions_mut().insert(tracer);
