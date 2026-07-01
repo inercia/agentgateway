@@ -322,11 +322,12 @@ pub(crate) fn apply_multiplex_to_listed_resource(
 pub(crate) fn apply_multiplex_to_resource_template(
 	default_target_name: Option<&String>,
 	server_name: &str,
-	mut rt: ResourceTemplate,
+	rt: ResourceTemplate,
 	flat: bool,
 ) -> ResourceTemplate {
 	#[cfg(feature = "adobe")]
 	{
+		let mut rt = rt;
 		rt.uri_template =
 			wrap_resource_template_uri_mixed(default_target_name, server_name, &rt.uri_template);
 		if !flat {

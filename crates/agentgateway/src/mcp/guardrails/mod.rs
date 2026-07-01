@@ -13,9 +13,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
+#[cfg(feature = "adobe")]
 use rmcp::model::ErrorData;
-use serde::Deserialize;
-use serde_json::Value;
 
 use crate::mcp::upstream::IncomingRequestContext;
 use crate::proxy::httpproxy::PolicyClient;
@@ -36,41 +35,128 @@ impl McpGuardrailsDynamicMetadata {
 	}
 }
 
+/// Merge ExtMCP `McpRequestResult.metadata` into request extensions for CEL `mcpGuardrails.*`.
+pub(crate) fn merge_metadata_into_extensions(
+	method: &str,
+	backends: &[String],
+	s: &prost_wkt_types::Struct,
+	ext: &mut ::http::Extensions,
+) {
+	let mut acc = ext
+		.remove::<McpGuardrailsDynamicMetadata>()
+		.unwrap_or_default();
+	for (k, v) in &s.fields {
+		match serde_json::to_value(v) {
+			Ok(j) => {
+				acc.0.insert(k.clone(), j);
+			},
+			Err(e) => {
+				tracing::warn!(method, ?backends, key = %k, error = %e, "mcpGuardrails: metadata: failed to convert value");
+			},
+		}
+	}
+	if !acc.0.is_empty() {
+		ext.insert(acc);
+	}
+}
+
 mod client;
 pub mod methods;
 pub mod phase;
+#[cfg(feature = "adobe")]
+mod rate_limit_types;
+#[cfg(feature = "adobe")]
 mod ratelimit;
+#[cfg(feature = "adobe")]
+mod ratelimit_pin;
+
+#[cfg(feature = "adobe")]
+pub use rate_limit_types::{
+	RateLimit, RateLimitDescriptor, RateLimitDescriptorEntry, RateLimitDescriptorSet,
+	RateLimitRejectionOverride, RateLimitRejectionOverrideBody, RateLimitRejectionOverrideHeader,
+	RejectionResponseAs,
+};
 
 pub use phase::Phase;
-pub(crate) use ratelimit::build_mcp_info;
+
+/// MCP context for CEL/rejection overrides from request params (shared across guardrail kinds).
+pub(crate) fn build_mcp_info(method: &str, body: Option<&Bytes>) -> crate::mcp::MCPInfo {
+	let mut info = crate::mcp::MCPInfo {
+		method_name: Some(method.to_string()),
+		..Default::default()
+	};
+	match method {
+		methods::TOOLS_CALL => {
+			if let Some(value) = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok()) {
+				let name = value
+					.get("name")
+					.and_then(|v| v.as_str())
+					.unwrap_or_default()
+					.to_string();
+				let arguments = value.get("arguments").and_then(|v| v.as_object()).cloned();
+				info.set_tool(String::new(), name);
+				info.capture_call_arguments(arguments);
+			}
+		},
+		methods::PROMPTS_GET => {
+			if let Some(name) = body
+				.and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
+				.and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+			{
+				info.set_prompt(String::new(), name);
+			}
+		},
+		methods::RESOURCES_READ => {
+			if let Some(uri) = body
+				.and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
+				.and_then(|v| v.get("uri").and_then(|n| n.as_str()).map(str::to_string))
+			{
+				info.set_resource(String::new(), uri);
+			}
+		},
+		_ => {},
+	}
+	info
+}
 
 /// MCP context captured during request-phase guardrails. Names are upstream names
 /// (post-rewrite), consistent with the RBAC namespace.
 #[derive(Debug, Clone)]
 pub(crate) struct GuardrailsRequestMcpInfo(pub(crate) crate::mcp::MCPInfo);
 
-/// JSON-RPC envelope for a rate-limit denial.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub enum RejectionResponseAs {
-	#[default]
-	JsonRpcError,
-	ToolResult,
-}
+/// Guardrail rejection payload. Adobe builds use enriched [`Rejection`]; upstream-style
+/// builds carry plain JSON-RPC [`ErrorData`].
+#[cfg(feature = "adobe")]
+pub type Denial = Rejection;
+#[cfg(not(feature = "adobe"))]
+pub type Denial = rmcp::model::ErrorData;
 
-impl RejectionResponseAs {
-	pub fn from_proto(
-		value: i32,
-	) -> Self {
-		use protos::agent::backend_policy_spec::mcp_guardrails::rate_limit::rejection_override::ResponseAs;
-		match ResponseAs::try_from(value).unwrap_or(ResponseAs::Unspecified) {
-			ResponseAs::ToolResult => Self::ToolResult,
-			ResponseAs::JsonRpcError | ResponseAs::Unspecified => Self::JsonRpcError,
-		}
+pub(crate) fn denial_from_error(error: rmcp::model::ErrorData) -> Denial {
+	#[cfg(feature = "adobe")]
+	{
+		error.into()
+	}
+	#[cfg(not(feature = "adobe"))]
+	{
+		error
 	}
 }
 
+pub(crate) fn denial_to_server_message(
+	denial: Denial,
+	id: rmcp::model::RequestId,
+) -> rmcp::model::ServerJsonRpcMessage {
+	#[cfg(feature = "adobe")]
+	{
+		denial.to_server_json_rpc_message(id)
+	}
+	#[cfg(not(feature = "adobe"))]
+	{
+		rmcp::model::ServerJsonRpcMessage::error(denial, id)
+	}
+}
+
+#[cfg(feature = "adobe")]
 /// MCP denial payload: protocol error or tool execution error.
 #[derive(Debug, Clone)]
 pub enum McpDenialEnvelope {
@@ -78,6 +164,7 @@ pub enum McpDenialEnvelope {
 	ToolResult { message: String },
 }
 
+#[cfg(feature = "adobe")]
 /// A guardrail rejection plus optional HTTP-layer overrides.
 #[derive(Debug, Clone)]
 pub struct Rejection {
@@ -86,6 +173,7 @@ pub struct Rejection {
 	pub http_headers: Vec<(String, String)>,
 }
 
+#[cfg(feature = "adobe")]
 impl Rejection {
 	pub fn json_rpc(error: rmcp::model::ErrorData) -> Self {
 		Self {
@@ -116,6 +204,7 @@ impl Rejection {
 	}
 }
 
+#[cfg(feature = "adobe")]
 impl From<rmcp::model::ErrorData> for Rejection {
 	fn from(error: rmcp::model::ErrorData) -> Self {
 		Self::json_rpc(error)
@@ -126,7 +215,7 @@ impl From<rmcp::model::ErrorData> for Rejection {
 pub enum Outcome<T> {
 	Pass,
 	Mutated(T),
-	Reject(Rejection),
+	Reject(Denial),
 }
 
 pub mod wire {
@@ -161,6 +250,7 @@ pub struct Processor {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ProcessorKind {
 	Remote(Remote),
+	#[cfg(feature = "adobe")]
 	RateLimit(RateLimit),
 }
 
@@ -227,169 +317,6 @@ pub struct Remote {
 	#[serde(default, skip_serializing_if = "HeaderFilter::is_default")]
 	pub request_headers: HeaderFilter,
 }
-
-#[apply(schema!)]
-pub struct RateLimit {
-	/// Rate-limit domain sent to the platform RLS service.
-	pub domain: String,
-	/// Platform-managed rate-limit backend target.
-	#[serde(flatten)]
-	pub target: Arc<SimpleBackendReference>,
-	/// Policies used when connecting to the platform RLS backend.
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	#[serde(deserialize_with = "crate::types::local::de_from_local_backend_policy")]
-	#[cfg_attr(
-		feature = "schema",
-		schemars(with = "Option<crate::types::local::SimpleLocalBackendPolicies>")
-	)]
-	pub policies: Vec<BackendTrafficPolicy>,
-	/// Rate-limit descriptors evaluated from request and MCP context.
-	pub descriptors: Arc<RateLimitDescriptorSet>,
-	/// Behavior when the peek call to the rate-limit service fails.
-	#[serde(default)]
-	pub failure_mode: FailureMode,
-	/// Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:
-	/// `guardrail.rateLimit.*`, plus request/mcp/jwt context.
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub rejection_overrides: Vec<RateLimitRejectionOverride>,
-}
-
-#[apply(schema!)]
-pub struct RateLimitDescriptorSet(pub Vec<RateLimitDescriptorEntry>);
-
-#[apply(schema!)]
-pub struct RateLimitDescriptorEntry {
-	#[serde(deserialize_with = "de_rate_limit_descriptors")]
-	#[cfg_attr(feature = "schema", schemars(with = "Vec<RateLimitDescriptorSerde>"))]
-	pub entries: Arc<Vec<RateLimitDescriptor>>,
-	#[serde(default)]
-	#[serde(rename = "type", alias = "unit")]
-	pub limit_type: crate::http::localratelimit::RateLimitType,
-	#[serde(default)]
-	pub limit_override: Option<Arc<cel::Expression>>,
-	#[serde(default)]
-	pub peek: bool,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct RateLimitDescriptor {
-	pub key: String,
-	#[serde(skip)]
-	#[cfg_attr(feature = "schema", schemars(skip))]
-	pub value: Arc<cel::Expression>,
-}
-
-#[derive(serde::Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct RateLimitDescriptorSerde {
-	#[serde(alias = "name")]
-	pub key: String,
-	#[serde(alias = "expression")]
-	pub value: String,
-}
-
-fn de_rate_limit_descriptors<'de: 'a, 'a, D>(
-	deserializer: D,
-) -> Result<Arc<Vec<RateLimitDescriptor>>, D::Error>
-where
-	D: serde::Deserializer<'de>,
-{
-	let raw = Vec::<RateLimitDescriptorSerde>::deserialize(deserializer)?;
-	let parsed = raw
-		.into_iter()
-		.map(|i| {
-			cel::Expression::new_strict(&i.value).map(|value| RateLimitDescriptor {
-				key: i.key,
-				value: Arc::new(value),
-			})
-		})
-		.collect::<Result<Vec<_>, _>>()
-		.map_err(|e| serde::de::Error::custom(e.to_string()))?;
-	Ok(Arc::new(parsed))
-}
-
-#[apply(schema!)]
-/// Reshapes a rate-limit denial before it reaches the MCP client. Ignored for
-/// remote guardrail rejections.
-pub struct RateLimitRejectionOverride {
-	pub when: Arc<cel::Expression>,
-	#[serde(default)]
-	pub response_as: RejectionResponseAs,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub status: Option<u16>,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub body: Option<RateLimitRejectionOverrideBody>,
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub headers: Vec<RateLimitRejectionOverrideHeader>,
-}
-
-#[apply(schema!)]
-pub struct RateLimitRejectionOverrideBody {
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub code: Option<i32>,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub message: Option<Arc<cel::Expression>>,
-}
-
-#[apply(schema!)]
-pub struct RateLimitRejectionOverrideHeader {
-	pub name: String,
-	pub value: Arc<cel::Expression>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, ::cel::DynamicType)]
-#[serde(rename_all = "camelCase")]
-#[dynamic(rename_all = "camelCase")]
-/// CEL context while evaluating rate-limit `rejectionOverrides`.
-pub struct GuardrailContext {
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	#[dynamic(rename = "rateLimit")]
-	pub rate_limit: Option<GuardrailRateLimitContext>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ::cel::DynamicType)]
-#[serde(rename_all = "camelCase")]
-#[dynamic(rename_all = "camelCase")]
-pub struct GuardrailRateLimitContext {
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub domain: Option<String>,
-	pub overall_code: String,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub limit: Option<GuardrailRateLimitStatusContext>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ::cel::DynamicType)]
-#[serde(rename_all = "camelCase")]
-#[dynamic(rename_all = "camelCase")]
-pub struct GuardrailRateLimitStatusContext {
-	pub descriptor: GuardrailRateLimitDescriptorContext,
-	pub code: String,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub requests_per_unit: Option<u32>,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub unit: Option<String>,
-	pub remaining: u32,
-	pub reset_seconds: i64,
-	pub retry_after_seconds: i64,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ::cel::DynamicType)]
-#[serde(rename_all = "camelCase")]
-#[dynamic(rename_all = "camelCase")]
-pub struct GuardrailRateLimitDescriptorContext {
-	pub entries: Vec<GuardrailRateLimitDescriptorEntryContext>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ::cel::DynamicType)]
-#[serde(rename_all = "camelCase")]
-#[dynamic(rename_all = "camelCase")]
-pub struct GuardrailRateLimitDescriptorEntryContext {
-	pub key: String,
-	pub value: String,
-}
-
 
 /// Allow/deny filter over request headers, mirroring ext_authz: empty `allowed`
 /// forwards every header plus all pseudo-headers (`:authority`, `:method`, ...);
@@ -461,6 +388,7 @@ impl Processor {
 				)
 				.await
 			},
+			#[cfg(feature = "adobe")]
 			ProcessorKind::RateLimit(rate_limit) => {
 				ratelimit::check_request::<P>(
 					rate_limit,
@@ -481,13 +409,14 @@ impl Processor {
 		backends: &[String],
 		body: &mut Bytes,
 		req_ctx: &IncomingRequestContext,
-		mcp: Option<&crate::mcp::MCPInfo>,
+		#[allow(unused_variables)] mcp: Option<&crate::mcp::MCPInfo>,
 		client: &PolicyClient,
 	) -> Outcome<rmcp::model::ServerResult> {
 		match &self.kind {
 			ProcessorKind::Remote(remote) => {
 				client::check_response(remote, method, backends, body, req_ctx, client).await
 			},
+			#[cfg(feature = "adobe")]
 			ProcessorKind::RateLimit(rate_limit) => {
 				ratelimit::check_response(rate_limit, method, backends, body, req_ctx, mcp, client).await
 			},
@@ -495,33 +424,28 @@ impl Processor {
 	}
 }
 
+#[cfg(feature = "adobe")]
 fn maybe_override_rejection(
 	processor: &Processor,
 	method: &str,
 	req_ctx: &IncomingRequestContext,
 	mcp: Option<&crate::mcp::MCPInfo>,
 	rej: ErrorData,
-) -> Rejection {
+) -> Denial {
+	use rate_limit_types::eval_override_headers;
+
 	let ProcessorKind::RateLimit(rate_limit) = &processor.kind else {
 		return rej.into();
 	};
 	if rate_limit.rejection_overrides.is_empty() {
 		return rej.into();
 	}
-	let rate_limit_ctx = rej
-		.data
-		.as_ref()
-		.and_then(parse_rate_limit_error_payload);
-	let guardrail = GuardrailContext {
-		rate_limit: rate_limit_ctx,
-	};
 	let req = req_ctx.as_request();
 	let exec = if let Some(mcp) = mcp {
 		cel::Executor::new_mcp_request(&req, mcp)
 	} else {
 		cel::Executor::new_request(&req)
-	}
-	.with_guardrail(&guardrail);
+	};
 	for override_cfg in &rate_limit.rejection_overrides {
 		if !exec.eval_bool(override_cfg.when.as_ref()) {
 			continue;
@@ -580,35 +504,6 @@ fn maybe_override_rejection(
 	rej.into()
 }
 
-fn parse_rate_limit_error_payload(data: &Value) -> Option<GuardrailRateLimitContext> {
-	serde_json::from_value::<GuardrailRateLimitContext>(data.clone())
-		.map_err(|e| {
-			tracing::debug!(error = %e, "mcpGuardrails: ignoring unparseable rateLimit mcp_error payload");
-		})
-		.ok()
-}
-
-fn eval_override_headers(
-	exec: &cel::Executor<'_>,
-	override_cfg: &RateLimitRejectionOverride,
-) -> Vec<(String, String)> {
-	override_cfg
-		.headers
-		.iter()
-		.filter_map(|header| match exec.eval(header.value.as_ref()) {
-			Ok(value) => value.as_string().ok().map(|v| (header.name.clone(), v)),
-			Err(e) => {
-				tracing::debug!(
-					name = %header.name,
-					error = %e,
-					"mcpGuardrails rejectionOverride header failed"
-				);
-				None
-			},
-		})
-		.collect()
-}
-
 /// Processors fire in order; first `Reject` short-circuits leaving `ctx` in whatever
 /// partially-mutated state earlier processors produced. When `ctx.params` is `None`
 /// (e.g. `*/list`) mutations are discarded — list filtering belongs in the response phase.
@@ -627,17 +522,24 @@ pub async fn run_call_request<P: serde::de::DeserializeOwned>(
 			Outcome::Pass => {},
 			Outcome::Mutated(p) => composed = Outcome::Mutated(p),
 			Outcome::Reject(r) => {
-				let mcp = ratelimit::build_mcp_info(ctx.method, ctx.params.as_ref());
-				let McpDenialEnvelope::JsonRpc(error) = r.envelope else {
+				#[cfg(feature = "adobe")]
+				{
+					let mcp = build_mcp_info(ctx.method, ctx.params.as_ref());
+					let McpDenialEnvelope::JsonRpc(error) = r.envelope else {
+						return Outcome::Reject(r);
+					};
+					return Outcome::Reject(maybe_override_rejection(
+						processor,
+						ctx.method,
+						req_ctx,
+						Some(&mcp),
+						error,
+					));
+				}
+				#[cfg(not(feature = "adobe"))]
+				{
 					return Outcome::Reject(r);
-				};
-				return Outcome::Reject(maybe_override_rejection(
-					processor,
-					ctx.method,
-					req_ctx,
-					Some(&mcp),
-					error,
-				));
+				}
 			},
 		}
 	}
@@ -666,16 +568,23 @@ pub async fn run_response(
 			Outcome::Pass => {},
 			Outcome::Mutated(r) => composed = Outcome::Mutated(r),
 			Outcome::Reject(r) => {
-				let McpDenialEnvelope::JsonRpc(error) = r.envelope else {
+				#[cfg(feature = "adobe")]
+				{
+					let McpDenialEnvelope::JsonRpc(error) = r.envelope else {
+						return Outcome::Reject(r);
+					};
+					return Outcome::Reject(maybe_override_rejection(
+						processor,
+						method,
+						req_ctx,
+						mcp,
+						error,
+					));
+				}
+				#[cfg(not(feature = "adobe"))]
+				{
 					return Outcome::Reject(r);
-				};
-				return Outcome::Reject(maybe_override_rejection(
-					processor,
-					method,
-					req_ctx,
-					mcp,
-					error,
-				));
+				}
 			},
 		}
 	}
@@ -686,6 +595,7 @@ pub async fn run_response(
 mod tests {
 	use super::*;
 
+	#[cfg(feature = "adobe")]
 	#[test]
 	fn deser_local_config() {
 		let cfg = r#"
@@ -756,6 +666,7 @@ processors:
 		assert_eq!(r1.failure_mode, FailureMode::FailClosed);
 	}
 
+	#[cfg(feature = "adobe")]
 	#[test]
 	fn deser_rejection_overrides() {
 		let cfg = r#"
@@ -770,11 +681,11 @@ processors:
             value: mcp.tool.name
         peek: true
     rejectionOverrides:
-      - when: has(guardrail.rateLimit.limit)
+      - when: has(mcpGuardrails.rateLimit.limit)
         status: 200
         body:
           code: -32001
-          message: '"retry after " + string(guardrail.rateLimit.limit.retryAfterSeconds)'
+          message: '"retry after " + string(mcpGuardrails.rateLimit.limit.retryAfterSeconds)'
 "#;
 		let ext: McpGuardrails = serde_yaml::from_str(cfg).expect("deser McpGuardrails");
 		let ProcessorKind::RateLimit(rl) = &ext.processors[0].kind else {
@@ -807,6 +718,28 @@ processors:
 		}
 	}
 
+	#[cfg(not(feature = "adobe"))]
+	#[test]
+	fn deser_rate_limit_processor_requires_adobe_feature() {
+		let cfg = r#"
+processors:
+  - kind: rateLimit
+    methods: { "tools/call": full }
+    host: 127.0.0.1:9998
+    domain: mcp
+    descriptors:
+      - entries:
+          - key: tool
+            value: mcp.tool.name
+        peek: true
+"#;
+		let err = serde_yaml::from_str::<McpGuardrails>(cfg).expect_err("rateLimit should not deser");
+		assert!(
+			err.to_string().contains("rateLimit"),
+			"unexpected error: {err}"
+		);
+	}
+
 	#[test]
 	fn warns_on_request_phase_for_unsupported_methods() {
 		// A catchall request phase matches subscribe/unsubscribe/complete, none of
@@ -837,6 +770,7 @@ processors:
 		assert!(warnings.iter().all(|w| w.contains("can never match")));
 	}
 
+	#[cfg(feature = "adobe")]
 	#[test]
 	fn rejection_override_status_only_applies_http_overrides() {
 		use rmcp::model::ErrorCode;
@@ -878,6 +812,7 @@ processors:
 		assert_eq!(overridden.http_status, Some(429));
 	}
 
+	#[cfg(feature = "adobe")]
 	#[test]
 	fn rejection_override_uses_mcp_context() {
 		use rmcp::model::ErrorCode;
@@ -938,6 +873,7 @@ processors:
 		assert_eq!(error.message.as_ref(), "limited: echo_demo");
 	}
 
+	#[cfg(feature = "adobe")]
 	#[test]
 	fn rejection_override_tool_result_envelope() {
 		use rmcp::model::ErrorCode;
@@ -977,5 +913,67 @@ processors:
 			_ => panic!("expected ToolResult envelope"),
 		}
 		assert_eq!(overridden.http_status, Some(200));
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn rejection_override_uses_mcp_guardrails_rate_limit_metadata() {
+		use rmcp::model::ErrorCode;
+
+		let ext = McpGuardrails {
+			processors: vec![Processor {
+				methods: HashMap::new(),
+				kind: ProcessorKind::RateLimit(RateLimit {
+					domain: "mcp".to_string(),
+					target: Arc::new(SimpleBackendReference::Backend("unused".into())),
+					policies: Vec::new(),
+					failure_mode: FailureMode::FailClosed,
+					descriptors: Arc::new(RateLimitDescriptorSet(Vec::new())),
+					rejection_overrides: vec![RateLimitRejectionOverride {
+						when: Arc::new(
+							cel::Expression::new_strict("has(mcpGuardrails.rateLimit.limit)").unwrap(),
+						),
+						response_as: RejectionResponseAs::default(),
+						status: None,
+						body: Some(RateLimitRejectionOverrideBody {
+							code: Some(-32001),
+							message: Some(Arc::new(
+								cel::Expression::new_strict(
+									r#""retry after " + string(mcpGuardrails.rateLimit.limit.retryAfterSeconds)"#,
+								)
+								.unwrap(),
+							)),
+						}),
+						headers: Vec::new(),
+					}],
+				}),
+			}],
+		};
+		let processor = &ext.processors[0];
+		let mut req_ctx = IncomingRequestContext::empty();
+		ratelimit::merge_rate_limit_mcp_error_into_extensions(
+			"tools/call",
+			&["mcp".to_string()],
+			serde_json::to_vec(&serde_json::json!({
+				"domain": "mcp_api",
+				"overallCode": "OVER_LIMIT",
+				"limit": {
+					"descriptor": { "entries": [{ "key": "tool", "value": "echo" }] },
+					"code": "OVER_LIMIT",
+					"retryAfterSeconds": 42
+				}
+			}))
+			.unwrap()
+			.as_slice(),
+			req_ctx.extensions_mut(),
+		);
+		let original = ErrorData::new(ErrorCode(-32003), "rate limit exceeded", None);
+
+		let overridden = maybe_override_rejection(processor, "tools/call", &req_ctx, None, original);
+		let McpDenialEnvelope::JsonRpc(error) = overridden.envelope else {
+			panic!("expected JsonRpc envelope");
+		};
+		assert_eq!(error.code, ErrorCode(-32001));
+		assert_eq!(error.message.as_ref(), "retry after 42");
 	}
 }

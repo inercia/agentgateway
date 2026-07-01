@@ -484,15 +484,27 @@ impl Relay {
 				Ok(Some(p))
 			},
 			Outcome::Reject(rej) => {
-				if let crate::mcp::guardrails::McpDenialEnvelope::JsonRpc(ref error) = rej.envelope {
+				#[cfg(feature = "adobe")]
+				{
+					if let crate::mcp::guardrails::McpDenialEnvelope::JsonRpc(ref error) = rej.envelope {
+						tracing::debug!(
+							method,
+							code = error.code.0,
+							message = %error.message,
+							"mcpGuardrails: request rejected",
+						);
+					} else {
+						tracing::debug!(method, "mcpGuardrails: request rejected with ToolResult");
+					}
+				}
+				#[cfg(not(feature = "adobe"))]
+				{
 					tracing::debug!(
 						method,
-						code = error.code.0,
-						message = %error.message,
+						code = rej.code.0,
+						message = %rej.message,
 						"mcpGuardrails: request rejected",
 					);
-				} else {
-					tracing::debug!(method, "mcpGuardrails: request rejected with ToolResult");
 				}
 				Err(UpstreamError::McpGuardrails(rej))
 			},
@@ -543,6 +555,7 @@ impl Relay {
 		Ok(())
 	}
 
+	#[cfg(feature = "adobe")]
 	pub fn default_target_name(&self) -> Option<String> {
 		self.upstreams.default_target_name.clone()
 	}
@@ -1106,6 +1119,7 @@ impl Relay {
 		}
 	}
 
+	#[cfg(feature = "adobe")]
 	pub async fn send_single_map_response<F>(
 		&self,
 		r: JsonRpcRequest<ClientRequest>,
@@ -1444,6 +1458,7 @@ fn messages_to_response(
 	messages_to_response_mapped(id, stream, mcp_log, |_: &mut ServerJsonRpcMessage| {})
 }
 
+#[cfg(feature = "adobe")]
 fn map_server_messages<F>(
 	stream: impl Stream<Item = Result<ServerJsonRpcMessage, ClientError>> + Send + 'static,
 	mut map_msg: F,
@@ -1636,7 +1651,10 @@ async fn apply_guardrails_response_intercept(
 		Outcome::Mutated(new_result) => {
 			Some(ServerJsonRpcMessage::response(new_result, resp.id.clone()))
 		},
-		Outcome::Reject(rej) => Some(rej.to_server_json_rpc_message(resp.id.clone())),
+		Outcome::Reject(rej) => Some(crate::mcp::guardrails::denial_to_server_message(
+			rej,
+			resp.id.clone(),
+		)),
 	}
 }
 

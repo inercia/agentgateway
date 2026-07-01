@@ -2412,7 +2412,7 @@
               "default": "failClosed"
             },
             "rejectionOverrides": {
-              "description": "Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:\n`guardrail.rateLimit.*`, plus request/mcp/jwt context.",
+              "description": "Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:\n`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.",
               "type": "array",
               "items": {
                 "$ref": "#/$defs/RateLimitRejectionOverride"
@@ -3534,6 +3534,10 @@
         "when": {
           "$ref": "#/$defs/Expression"
         },
+        "responseAs": {
+          "$ref": "#/$defs/RejectionResponseAs",
+          "default": "jsonRpcError"
+        },
         "status": {
           "type": [
             "integer",
@@ -3563,6 +3567,14 @@
       "additionalProperties": false,
       "required": [
         "when"
+      ]
+    },
+    "RejectionResponseAs": {
+      "description": "JSON-RPC envelope for a rate-limit denial.",
+      "type": "string",
+      "enum": [
+        "jsonRpcError",
+        "toolResult"
       ]
     },
     "RateLimitRejectionOverrideBody": {

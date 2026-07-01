@@ -580,9 +580,10 @@ fn convert_mcp_guardrails(
 ) -> Result<crate::mcp::guardrails::McpGuardrails, ProtoError> {
 	use proto::agent::backend_policy_spec::mcp_guardrails::processor::Kind as ProtoProcessorKind;
 	use proto::agent::backend_policy_spec::mcp_guardrails::{
-		FailureMode as ProtoFailureMode, Phase as ProtoPhase, RateLimit as ProtoRateLimit,
-		Remote as ProtoRemote,
+		FailureMode as ProtoFailureMode, Phase as ProtoPhase, Remote as ProtoRemote,
 	};
+	#[cfg(feature = "adobe")]
+	use proto::agent::backend_policy_spec::mcp_guardrails::RateLimit as ProtoRateLimit;
 
 	fn convert_methods(
 		methods: &std::collections::HashMap<String, i32>,
@@ -650,6 +651,7 @@ fn convert_mcp_guardrails(
 		})
 	}
 
+	#[cfg(feature = "adobe")]
 	fn convert_rejection_overrides(
 		overrides: &[proto::agent::backend_policy_spec::mcp_guardrails::rate_limit::RejectionOverride],
 		diagnostics: &mut Diagnostics,
@@ -700,6 +702,7 @@ fn convert_mcp_guardrails(
 			.collect()
 	}
 
+	#[cfg(feature = "adobe")]
 	fn convert_rate_limit(
 		r: &ProtoRateLimit,
 		diagnostics: &mut Diagnostics,
@@ -778,13 +781,24 @@ fn convert_mcp_guardrails(
 				crate::mcp::guardrails::ProcessorKind::Remote(convert_remote(r, diagnostics)?)
 			},
 			Some(ProtoProcessorKind::RateLimit(r)) => {
-				crate::mcp::guardrails::ProcessorKind::RateLimit(convert_rate_limit(
-					r,
-					diagnostics,
-					&format!(
-						"backend.mcpGuardrails.processors[{processor_idx}].rateLimit.rejectionOverrides"
-					),
-				))
+				#[cfg(feature = "adobe")]
+				{
+					crate::mcp::guardrails::ProcessorKind::RateLimit(convert_rate_limit(
+						r,
+						diagnostics,
+						&format!(
+							"backend.mcpGuardrails.processors[{processor_idx}].rateLimit.rejectionOverrides"
+						),
+					))
+				}
+				#[cfg(not(feature = "adobe"))]
+				{
+					let _ = r;
+					diagnostics.add_warning(&format!(
+						"mcpGuardrails rateLimit processor [{processor_idx}] requires adobe feature; ignoring",
+					));
+					continue;
+				}
 			},
 			None => {
 				diagnostics.add_warning("mcpGuardrails processor has no kind set; ignoring");

@@ -826,7 +826,7 @@ mod adobe_tests {
 		);
 		assert_eq!(
 			classify_upstream_error(&UpstreamError::McpGuardrails(
-				crate::mcp::guardrails::Rejection::json_rpc(rmcp::model::ErrorData {
+				crate::mcp::guardrails::denial_from_error(rmcp::model::ErrorData {
 					code: rmcp::model::ErrorCode::METHOD_NOT_FOUND,
 					message: "test".into(),
 					data: None,

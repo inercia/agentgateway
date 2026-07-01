@@ -3193,27 +3193,7 @@ mod guardrails_test_support {
 		}))
 	}
 
-	/// Remote guardrails policy with rejection overrides on the processor.
-	/// Overrides are ignored unless the rejecting processor is rate-limit.
-	pub fn policy_with_overrides(
-		addr: SocketAddr,
-		_rejection_overrides: Vec<guardrails::RateLimitRejectionOverride>,
-	) -> BackendTrafficPolicy {
-		let remote = guardrails::Remote {
-			target: Arc::new(SimpleBackendReference::InlineBackend(Target::Address(addr))),
-			policies: Vec::new(),
-			failure_mode: guardrails::FailureMode::FailClosed,
-			metadata: HashMap::new(),
-			request_headers: Default::default(),
-		};
-		BackendTrafficPolicy::McpGuardrails(Arc::new(guardrails::McpGuardrails {
-			processors: vec![guardrails::Processor {
-				methods: default_methods(),
-				kind: guardrails::ProcessorKind::Remote(remote),
-			}],
-		}))
-	}
-
+	#[cfg(feature = "adobe")]
 	pub fn rate_limit_policy(
 		addr: SocketAddr,
 		rejection_overrides: Vec<guardrails::RateLimitRejectionOverride>,
@@ -3221,6 +3201,7 @@ mod guardrails_test_support {
 		rate_limit_policy_with_entry(addr, "tool", "mcp.tool.name", rejection_overrides)
 	}
 
+	#[cfg(feature = "adobe")]
 	pub fn rate_limit_policy_with_entry(
 		addr: SocketAddr,
 		key: &str,
@@ -3230,6 +3211,7 @@ mod guardrails_test_support {
 		rate_limit_policy_with_entry_and_peek(addr, key, value, true, rejection_overrides)
 	}
 
+	#[cfg(feature = "adobe")]
 	pub fn rate_limit_policy_with_entry_and_peek(
 		addr: SocketAddr,
 		key: &str,
@@ -3263,6 +3245,7 @@ mod guardrails_test_support {
 		}))
 	}
 
+	#[cfg(feature = "adobe")]
 	pub fn rejection_override(when: &str, code: i32, message: &str) -> guardrails::RateLimitRejectionOverride {
 		guardrails::RateLimitRejectionOverride {
 			when: Arc::new(crate::cel::Expression::new_strict(when).unwrap()),
@@ -3411,14 +3394,7 @@ async fn mcp_guardrails_remote_rejection_ignores_overrides() {
 	.spawn()
 	.await;
 
-	let policy = guardrails_test_support::policy_with_overrides(
-		extmcp_mock.address,
-		vec![guardrails_test_support::rejection_override(
-			"true",
-			-32042,
-			r#""remote denied""#,
-		)],
-	);
+	let policy = guardrails_test_support::policy(extmcp_mock.address);
 	let mock = mock_streamable_http_server(true).await;
 	let (_bind, io) = setup_proxy_policies(&mock, true, false, vec![policy]).await;
 	let client = mcp_streamable_client(io).await;
@@ -3479,6 +3455,7 @@ async fn mcp_guardrails_invalid_mcp_error_falls_back_to_default_error() {
 	assert!(e.data.is_none(), "invalid mcp_error JSON should be ignored");
 }
 
+#[cfg(feature = "adobe")]
 #[tokio::test]
 async fn mcp_guardrails_native_rate_limit_rejection_override_uses_limit_payload() {
 	use protos::ext_mcp::authorization_error::Code;
@@ -3523,9 +3500,9 @@ async fn mcp_guardrails_native_rate_limit_rejection_override_uses_limit_payload(
 	let policy = guardrails_test_support::rate_limit_policy(
 		gtx.address,
 		vec![guardrails_test_support::rejection_override(
-			"has(guardrail.rateLimit.limit)",
+			"has(mcpGuardrails.rateLimit.limit)",
 			-32001,
-			r#""retry after " + string(guardrail.rateLimit.limit.retryAfterSeconds)"#,
+			r#""retry after " + string(mcpGuardrails.rateLimit.limit.retryAfterSeconds)"#,
 		)],
 	);
 	let mock = mock_streamable_http_server(true).await;
@@ -3545,6 +3522,118 @@ async fn mcp_guardrails_native_rate_limit_rejection_override_uses_limit_payload(
 	assert_eq!(e.message.as_ref(), "retry after 42");
 }
 
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn mcp_guardrails_native_rate_limit_peek_exposes_quota_on_pass() {
+	use crate::http::transformation_cel::{
+		LocalTransform, LocalTransformationConfig, Transformation,
+	};
+	use crate::test_helpers::extmcpmock::{closure_mock, pass_request_with, pass_response};
+
+	let peek_quota_metadata: prost_wkt_types::Struct = serde_json::from_value(serde_json::json!({
+		"rateLimit": {
+			"domain": "mcp",
+			"overallCode": "OK",
+			"limit": {
+				"descriptor": {
+					"entries": [{ "key": "tool", "value": "echo" }]
+				},
+				"code": "OK",
+				"remaining": 3,
+				"requestsPerUnit": 5,
+				"unit": "MINUTE",
+				"resetSeconds": 42,
+				"retryAfterSeconds": 0
+			}
+		}
+	}))
+	.unwrap();
+
+	let gtx = closure_mock(
+		move |_| {
+			pass_request_with(
+				Vec::<(&str, &str)>::new(),
+				Vec::<&str>::new(),
+				Some(peek_quota_metadata.clone()),
+			)
+		},
+		|_| pass_response(),
+	)
+	.spawn()
+	.await;
+
+	let xfm = Transformation::try_from_local_config(
+		LocalTransformationConfig {
+			request: Some(LocalTransform {
+				set: vec![
+					(
+						strng::new("x-mcp-rl-overall"),
+						strng::new(
+							"has(mcpGuardrails.rateLimit.overallCode) ? mcpGuardrails.rateLimit.overallCode : \"\"",
+						),
+					),
+					(
+						strng::new("x-mcp-rl-remaining"),
+						strng::new(
+							"has(mcpGuardrails.rateLimit.limit) ? string(mcpGuardrails.rateLimit.limit.remaining) : \"\"",
+						),
+					),
+				],
+				..Default::default()
+			}),
+			response: None,
+		},
+		true,
+	)
+	.unwrap();
+	let target_policy = BackendTrafficPolicy::Transformation(Arc::new(xfm));
+
+	let policy = guardrails_test_support::rate_limit_policy_with_entry(
+		gtx.address,
+		"tool",
+		"mcp.tool.name",
+		Vec::new(),
+	);
+
+	let (mock, captured) = mock_streamable_http_server_with_capture(true).await;
+	let (_bind, io) = setup_proxy_policies_with_target(
+		&mock,
+		true,
+		false,
+		vec![policy],
+		vec![target_policy],
+	)
+	.await;
+	let client = mcp_streamable_client(io).await;
+	let _ = client
+		.call_tool(
+			rmcp::model::CallToolRequestParams::new("echo").with_arguments(serde_json::Map::new()),
+		)
+		.await
+		.expect("peek pass should allow the tool call");
+
+	let headers = captured.lock().unwrap().clone();
+	let saw_overall = headers.iter().any(|h| {
+		h.get("x-mcp-rl-overall")
+			.map(|v| v.as_bytes())
+			== Some(b"OK")
+	});
+	let saw_remaining = headers.iter().any(|h| {
+		h.get("x-mcp-rl-remaining")
+			.map(|v| v.as_bytes())
+			== Some(b"3")
+	});
+	assert!(
+		saw_overall,
+		"expected x-mcp-rl-overall:OK from mcpGuardrails.rateLimit.overallCode; saw {headers:?}"
+	);
+	assert!(
+		saw_remaining,
+		"expected x-mcp-rl-remaining:3 from mcpGuardrails.rateLimit.limit.remaining; saw {headers:?}"
+	);
+}
+
+#[cfg(feature = "adobe")]
 #[tokio::test]
 async fn mcp_guardrails_native_rate_limit_increment_runs_after_success() {
 	use tokio::sync::mpsc;
@@ -3608,6 +3697,7 @@ async fn mcp_guardrails_native_rate_limit_increment_runs_after_success() {
 	);
 }
 
+#[cfg(feature = "adobe")]
 #[tokio::test]
 async fn mcp_guardrails_native_rate_limit_non_peek_increments_on_request_only() {
 	use tokio::sync::mpsc;
@@ -3672,6 +3762,7 @@ async fn mcp_guardrails_native_rate_limit_non_peek_increments_on_request_only() 
 	);
 }
 
+#[cfg(feature = "adobe")]
 #[tokio::test]
 async fn mcp_guardrails_native_rate_limit_skips_increment_on_jsonrpc_error() {
 	use tokio::sync::mpsc;

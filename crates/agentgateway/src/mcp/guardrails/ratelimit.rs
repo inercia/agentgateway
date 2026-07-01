@@ -1,4 +1,6 @@
-use std::sync::Arc;
+#![cfg(feature = "adobe")]
+
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use prost_wkt_types::Struct;
@@ -7,13 +9,13 @@ use serde::Deserialize;
 use tracing::{trace, warn};
 
 use crate::cel::{self, Executor};
-use crate::http::ext_proc::GrpcReferenceChannel;
 use crate::http::localratelimit::RateLimitType;
 use crate::http::remoteratelimit::proto;
 use crate::mcp::guardrails::wire::ext_mcp_client::ExtMcpClient;
 use crate::mcp::guardrails::wire::authorization_error::Code as AuthCode;
-use crate::mcp::guardrails::wire::{AuthorizationError, McpRequest, McpResponse, mcp_request_result};
-use crate::mcp::guardrails::{FailureMode, Outcome, RateLimit, RateLimitDescriptor as ConfigDescriptor, client};
+use crate::mcp::guardrails::wire::{AuthorizationError, McpRequest, McpRequestResult, McpResponse, mcp_request_result};
+use crate::mcp::guardrails::ratelimit_pin::{self, RateLimitGtxPin};
+use crate::mcp::guardrails::{FailureMode, McpGuardrailsDynamicMetadata, Outcome, RateLimit, RateLimitDescriptor as ConfigDescriptor, build_mcp_info, client, denial_from_error, merge_metadata_into_extensions};
 use crate::mcp::upstream::IncomingRequestContext;
 use crate::proxy::httpproxy::PolicyClient;
 
@@ -25,12 +27,45 @@ struct DescriptorLimitOverride {
 	requests_per_unit: u32,
 }
 
+/// Merge a parsed GTX rate-limit status object as `mcpGuardrails.rateLimit`.
+pub(crate) fn merge_rate_limit_status_into_extensions(
+	method: &str,
+	backends: &[String],
+	status: serde_json::Value,
+	ext: &mut ::http::Extensions,
+) {
+	if !status.is_object() {
+		tracing::warn!(method, ?backends, "mcpGuardrails: rateLimit status must be a JSON object");
+		return;
+	}
+	let mut acc = ext
+		.remove::<McpGuardrailsDynamicMetadata>()
+		.unwrap_or_default();
+	acc.0.insert("rateLimit".to_string(), status);
+	ext.insert(acc);
+}
+
+/// Parse GTX `mcp_error` bytes and expose as `mcpGuardrails.rateLimit` before rejection.
+pub(crate) fn merge_rate_limit_mcp_error_into_extensions(
+	method: &str,
+	backends: &[String],
+	mcp_error: &[u8],
+	ext: &mut ::http::Extensions,
+) {
+	match serde_json::from_slice::<serde_json::Value>(mcp_error) {
+		Ok(status) => merge_rate_limit_status_into_extensions(method, backends, status, ext),
+		Err(e) => {
+			tracing::debug!(method, ?backends, error = %e, "mcpGuardrails: ignoring unparseable rateLimit mcp_error");
+		},
+	}
+}
+
 pub(crate) async fn check_request<P>(
 	rate_limit: &RateLimit,
 	method: &str,
 	backends: &[String],
 	body: Option<&Bytes>,
-	req_ctx: &IncomingRequestContext,
+	req_ctx: &mut IncomingRequestContext,
 	client: &PolicyClient,
 ) -> Outcome<P> {
 	let mcp = build_mcp_info(method, body);
@@ -45,23 +80,49 @@ pub(crate) async fn check_request<P>(
 		mcp_request: body.cloned(),
 		headers: Vec::new(),
 	};
-	let mut grpc = build_client(rate_limit, client.clone());
+	let capture = Arc::new(Mutex::new(None));
+	let mut grpc = ExtMcpClient::new(ratelimit_pin::channel_for(
+		rate_limit,
+		client.clone(),
+		None,
+		Some(capture.clone()),
+	));
 	let resp = match grpc.check_request(tonic::Request::new(request)).await {
 		Ok(resp) => resp.into_inner(),
 		Err(status) => return on_grpc_error(rate_limit, method, backends, "checkRequest", status),
 	};
-	match resp.result {
-		Some(mcp_request_result::Result::Pass(_)) => Outcome::Pass,
+	let McpRequestResult {
+		result,
+		metadata,
+		..
+	} = resp;
+	let store_pin = |req_ctx: &mut IncomingRequestContext| {
+		if let Some(pin) = capture.lock().unwrap().take() {
+			req_ctx.extensions_mut().insert(RateLimitGtxPin(pin));
+		}
+	};
+	match result {
+		Some(mcp_request_result::Result::Pass(_)) => {
+			if let Some(m) = metadata {
+				merge_metadata_into_extensions(method, backends, &m, req_ctx.extensions_mut());
+			}
+			store_pin(req_ctx);
+			Outcome::Pass
+		},
 		Some(mcp_request_result::Result::Mutated(_)) => {
 			warn!(
 				method,
 				?backends,
 				"mcpGuardrails rateLimit: ignoring unexpected request mutation"
 			);
+			if let Some(m) = metadata {
+				merge_metadata_into_extensions(method, backends, &m, req_ctx.extensions_mut());
+			}
+			store_pin(req_ctx);
 			Outcome::Pass
 		},
 		Some(mcp_request_result::Result::Error(e)) => {
-			on_inband_service_error(rate_limit, method, backends, e)
+			on_inband_service_error(rate_limit, method, backends, e, req_ctx)
 		},
 		None => on_protocol_violation(rate_limit, method, backends, "missing result oneof"),
 	}
@@ -88,9 +149,13 @@ pub(crate) async fn check_response(
 	let Some(metadata_context) = build_metadata(rate_limit, &req, Some(&mcp), Phase::Response) else {
 		return Outcome::Pass;
 	};
-	let spawn_target = rate_limit.target.clone();
-	let spawn_policies = Arc::new(rate_limit.policies.clone());
-	let spawn_client = client.clone();
+	let override_dest = req_ctx.extensions().get::<RateLimitGtxPin>().map(|p| p.0);
+	let grpc_channel = ratelimit_pin::channel_for(
+		rate_limit,
+		client.clone(),
+		override_dest,
+		None,
+	);
 	let method = method.to_string();
 	let backends = backends.to_vec();
 	let mcp_response = body.clone();
@@ -101,55 +166,12 @@ pub(crate) async fn check_response(
 			metadata_context: Some(metadata_context),
 			mcp_response,
 		};
-		let mut grpc = ExtMcpClient::new(GrpcReferenceChannel {
-			target: spawn_target,
-			policies: spawn_policies,
-			client: spawn_client,
-		});
+		let mut grpc = ExtMcpClient::new(grpc_channel);
 		if let Err(e) = grpc.check_response(tonic::Request::new(request)).await {
 			trace!(method, ?backends, error = %e, "mcpGuardrails rateLimit increment failed");
 		}
 	});
 	Outcome::Pass
-}
-
-pub(crate) fn build_mcp_info(method: &str, body: Option<&Bytes>) -> crate::mcp::MCPInfo {
-	let mut info = crate::mcp::MCPInfo {
-		method_name: Some(method.to_string()),
-		..Default::default()
-	};
-	match method {
-		crate::mcp::guardrails::methods::TOOLS_CALL => {
-			if let Some(value) = body.and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok()) {
-				let name = value
-					.get("name")
-					.and_then(|v| v.as_str())
-					.unwrap_or_default()
-					.to_string();
-				let arguments = value.get("arguments").and_then(|v| v.as_object()).cloned();
-				info.set_tool(String::new(), name);
-				info.capture_call_arguments(arguments);
-			}
-		},
-		crate::mcp::guardrails::methods::PROMPTS_GET => {
-			if let Some(name) = body
-				.and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
-				.and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
-			{
-				info.set_prompt(String::new(), name);
-			}
-		},
-		crate::mcp::guardrails::methods::RESOURCES_READ => {
-			if let Some(uri) = body
-				.and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
-				.and_then(|v| v.get("uri").and_then(|n| n.as_str()).map(str::to_string))
-			{
-				info.set_resource(String::new(), uri);
-			}
-		},
-		_ => {},
-	}
-	info
 }
 
 fn build_mcp_info_from_result(method: &str, result: &ServerResult) -> crate::mcp::MCPInfo {
@@ -306,33 +328,30 @@ fn eval_limit_override(
 	})))
 }
 
-
-fn build_client(
-	rate_limit: &RateLimit,
-	client: PolicyClient,
-) -> ExtMcpClient<GrpcReferenceChannel> {
-	ExtMcpClient::new(GrpcReferenceChannel {
-		target: rate_limit.target.clone(),
-		policies: Arc::new(rate_limit.policies.clone()),
-		client,
-	})
-}
-
 fn on_inband_service_error<T>(
 	rate_limit: &RateLimit,
 	method: &str,
 	backends: &[String],
 	e: AuthorizationError,
+	req_ctx: &mut IncomingRequestContext,
 ) -> Outcome<T> {
+	if let Some(mcp_error) = e.mcp_error.as_deref().filter(|b| !b.is_empty()) {
+		merge_rate_limit_mcp_error_into_extensions(
+			method,
+			backends,
+			mcp_error,
+			req_ctx.extensions_mut(),
+		);
+	}
 	let code = AuthCode::try_from(e.code).unwrap_or(AuthCode::Unknown);
 	match code {
 		AuthCode::ResourceExhausted | AuthCode::PermissionDenied => {
-			Outcome::Reject(client::translate_error(method, backends, e).into())
+			Outcome::Reject(denial_from_error(client::translate_error(method, backends, e)))
 		},
 		AuthCode::Unknown | AuthCode::Invalid => match rate_limit.failure_mode {
 			FailureMode::FailOpen => Outcome::Pass,
 			FailureMode::FailClosed => {
-				Outcome::Reject(client::translate_error(method, backends, e).into())
+				Outcome::Reject(denial_from_error(client::translate_error(method, backends, e)))
 			},
 		},
 	}
@@ -349,10 +368,10 @@ fn on_grpc_error<T>(
 	match rate_limit.failure_mode {
 		FailureMode::FailOpen => Outcome::Pass,
 		FailureMode::FailClosed => {
-			Outcome::Reject(ErrorData::internal_error(
+			Outcome::Reject(denial_from_error(ErrorData::internal_error(
 				format!("mcpGuardrails rateLimit {rpc} failed: {}", status.message()),
 				None,
-			).into())
+			)))
 		},
 	}
 }
@@ -372,10 +391,10 @@ fn on_protocol_violation<T>(
 	match rate_limit.failure_mode {
 		FailureMode::FailOpen => Outcome::Pass,
 		FailureMode::FailClosed => {
-			Outcome::Reject(ErrorData::internal_error(
+			Outcome::Reject(denial_from_error(ErrorData::internal_error(
 				format!("mcpGuardrails rateLimit protocol violation: {reason}"),
 				None,
-			).into())
+			)))
 		},
 	}
 }
@@ -383,6 +402,8 @@ fn on_protocol_violation<T>(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::sync::Arc;
+
 	use crate::mcp::guardrails::{RateLimitDescriptorEntry, RateLimitDescriptorSet};
 	use crate::types::agent::SimpleBackendReference;
 
@@ -468,13 +489,14 @@ mod tests {
 			..rate_limit_with_failure_mode(FailureMode::FailOpen)
 		};
 		let body = bytes::Bytes::from_static(br#"{"name":"echo"}"#);
+		let mut req_ctx = IncomingRequestContext::empty();
 
 		let outcome: Outcome<()> = check_request(
 			&rate_limit,
 			crate::mcp::guardrails::methods::TOOLS_CALL,
 			&["mcp".to_string()],
 			Some(&body),
-			&IncomingRequestContext::empty(),
+			&mut req_ctx,
 			&client,
 		)
 		.await;
@@ -505,13 +527,14 @@ mod tests {
 			..rate_limit_with_failure_mode(FailureMode::FailOpen)
 		};
 		let body = bytes::Bytes::from_static(br#"{"name":"echo"}"#);
+		let mut req_ctx = IncomingRequestContext::empty();
 
 		let outcome: Outcome<()> = check_request(
 			&rate_limit,
 			crate::mcp::guardrails::methods::TOOLS_CALL,
 			&["mcp".to_string()],
 			Some(&body),
-			&IncomingRequestContext::empty(),
+			&mut req_ctx,
 			&client,
 		)
 		.await;
@@ -563,5 +586,171 @@ mod tests {
 			upstream_val["descriptors"][0]["entries"][0]["value"],
 			"echo"
 		);
+	}
+
+	mod pinning {
+		use std::collections::HashMap;
+		use std::net::SocketAddr;
+		use std::sync::atomic::{AtomicUsize, Ordering};
+		use std::sync::{Arc, Mutex};
+
+		use agent_core::strng;
+		use rmcp::model::ServerResult;
+
+		use crate::mcp::guardrails::FailureMode;
+		use crate::store::LocalWorkload;
+		use crate::test_helpers::extmcpmock::{self, pass_request, pass_response};
+		use crate::types::agent::SimpleBackendReference;
+		use crate::types::discovery::{NamespacedHostname, NetworkAddress, Service, Workload};
+
+		use super::*;
+
+		fn two_replica_gtx_service(
+			pi: &Arc<crate::ProxyInputs>,
+			addr_a: SocketAddr,
+			addr_b: SocketAddr,
+		) -> SimpleBackendReference {
+			let svc = Service {
+				name: strng::literal!("gtx"),
+				namespace: strng::literal!("default"),
+				hostname: strng::literal!("gtx.default.svc.cluster.local"),
+				vips: vec![NetworkAddress {
+					network: strng::EMPTY,
+					address: addr_a.ip(),
+				}],
+				ports: HashMap::from([(80, addr_a.port())]),
+				..Default::default()
+			};
+			let wl_a = LocalWorkload {
+				workload: Workload {
+					uid: strng::literal!("wl-a"),
+					name: strng::literal!("gtx-a"),
+					namespace: strng::literal!("default"),
+					workload_ips: vec![addr_a.ip()],
+					..Default::default()
+				},
+				services: HashMap::from([(
+					"default/gtx.default.svc.cluster.local".to_string(),
+					HashMap::from([(80, addr_a.port())]),
+				)]),
+			};
+			let wl_b = LocalWorkload {
+				workload: Workload {
+					uid: strng::literal!("wl-b"),
+					name: strng::literal!("gtx-b"),
+					namespace: strng::literal!("default"),
+					workload_ips: vec![addr_b.ip()],
+					..Default::default()
+				},
+				services: HashMap::from([(
+					"default/gtx.default.svc.cluster.local".to_string(),
+					HashMap::from([(80, addr_b.port())]),
+				)]),
+			};
+			pi.stores
+				.discovery
+				.sync_local(vec![svc], vec![wl_a, wl_b], Default::default())
+				.unwrap();
+			SimpleBackendReference::Service {
+				name: NamespacedHostname {
+					namespace: strng::literal!("default"),
+					hostname: strng::literal!("gtx.default.svc.cluster.local"),
+				},
+				port: 80,
+			}
+		}
+
+		fn recording_mock(
+			replica: SocketAddr,
+			hits: Arc<Mutex<Vec<SocketAddr>>>,
+			rpc_count: Arc<AtomicUsize>,
+		) -> extmcpmock::ExtMcpMock<extmcpmock::ClosureHandler> {
+			let hits_req = hits.clone();
+			let rpc_count_req = rpc_count.clone();
+			extmcpmock::closure_mock(
+				move |_| {
+					hits_req.lock().unwrap().push(replica);
+					rpc_count_req.fetch_add(1, Ordering::SeqCst);
+					pass_request()
+				},
+				move |_| {
+					hits.lock().unwrap().push(replica);
+					rpc_count.fetch_add(1, Ordering::SeqCst);
+					pass_response()
+				},
+			)
+		}
+
+		#[tokio::test]
+		async fn peek_and_increment_pin_to_same_gtx_replica() {
+			let addr_a: SocketAddr = "127.0.0.1:37101".parse().unwrap();
+			let addr_b: SocketAddr = "127.0.0.1:37102".parse().unwrap();
+			let hits: Arc<Mutex<Vec<SocketAddr>>> = Arc::new(Mutex::new(Vec::new()));
+			let rpc_count = Arc::new(AtomicUsize::new(0));
+
+			let mock_a = recording_mock(addr_a, hits.clone(), rpc_count.clone());
+			let mock_b = recording_mock(addr_b, hits.clone(), rpc_count.clone());
+			let _inst_a = mock_a.spawn_on(addr_a).await;
+			let _inst_b = mock_b.spawn_on(addr_b).await;
+
+			let t = crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap();
+			let backend_ref = two_replica_gtx_service(&t.pi, addr_a, addr_b);
+			let client = PolicyClient::new(t.pi);
+			let rate_limit = RateLimit {
+				target: Arc::new(backend_ref),
+				failure_mode: FailureMode::FailClosed,
+				..test_rate_limit()
+			};
+			let req_body = bytes::Bytes::from_static(br#"{"name":"echo"}"#);
+			let resp_body = bytes::Bytes::from(
+				serde_json::to_vec(&ServerResult::CallToolResult(
+					rmcp::model::CallToolResult::success(vec![]),
+				))
+				.unwrap(),
+			);
+			let mut req_ctx = IncomingRequestContext::empty();
+			let request_mcp = build_mcp_info(
+				crate::mcp::guardrails::methods::TOOLS_CALL,
+				Some(&req_body),
+			);
+
+			let _: Outcome<()> = check_request(
+				&rate_limit,
+				crate::mcp::guardrails::methods::TOOLS_CALL,
+				&["mcp".to_string()],
+				Some(&req_body),
+				&mut req_ctx,
+				&client,
+			)
+			.await;
+
+			check_response(
+				&rate_limit,
+				crate::mcp::guardrails::methods::TOOLS_CALL,
+				&["mcp".to_string()],
+				&resp_body,
+				&req_ctx,
+				Some(&request_mcp),
+				&client,
+			)
+			.await;
+
+			let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+			while rpc_count.load(Ordering::SeqCst) < 2 && tokio::time::Instant::now() < deadline {
+				tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+			}
+
+			let hits = hits.lock().unwrap();
+			assert_eq!(
+				rpc_count.load(Ordering::SeqCst),
+				2,
+				"expected peek + increment RPCs"
+			);
+			assert_eq!(hits.len(), 2, "expected two recorded GTX addresses");
+			assert_eq!(
+				hits[0], hits[1],
+				"peek and increment must hit the same pinned replica"
+			);
+		}
 	}
 }

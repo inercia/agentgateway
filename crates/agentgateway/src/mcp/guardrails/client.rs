@@ -16,7 +16,7 @@ use crate::mcp::guardrails::wire::{
 	self, AuthorizationError, McpRequest, McpResponse, mcp_request_result, mcp_response_result,
 };
 use crate::mcp::guardrails::{
-	FailureMode, HeaderFilter, McpGuardrailsDynamicMetadata, Outcome, Remote,
+	FailureMode, HeaderFilter, Outcome, Remote, denial_from_error,
 };
 use crate::mcp::upstream::IncomingRequestContext;
 use crate::proxy::httpproxy::PolicyClient;
@@ -80,7 +80,7 @@ pub(crate) async fn check_request<P: serde::de::DeserializeOwned>(
 			},
 		},
 		Some(mcp_request_result::Result::Error(e)) => {
-			Outcome::Reject(translate_error(method, backends, e).into())
+			Outcome::Reject(denial_from_error(translate_error(method, backends, e)))
 		},
 		None => on_protocol_violation(remote, method, backends, "missing result oneof"),
 	}
@@ -100,7 +100,7 @@ fn apply_request_side(
 		apply_header_mutation(method, backends, hm, req_ctx.headers_mut());
 	}
 	if let Some(m) = metadata {
-		merge_metadata_into_extensions(method, backends, &m, req_ctx.extensions_mut());
+		super::merge_metadata_into_extensions(method, backends, &m, req_ctx.extensions_mut());
 	}
 }
 
@@ -148,30 +148,6 @@ fn apply_header_mutation(
 	}
 }
 
-fn merge_metadata_into_extensions(
-	method: &str,
-	backends: &[String],
-	s: &Struct,
-	ext: &mut ::http::Extensions,
-) {
-	let mut acc = ext
-		.remove::<McpGuardrailsDynamicMetadata>()
-		.unwrap_or_default();
-	for (k, v) in &s.fields {
-		match serde_json::to_value(v) {
-			Ok(j) => {
-				acc.0.insert(k.clone(), j);
-			},
-			Err(e) => {
-				warn!(method, ?backends, key = %k, error = %e, "mcpGuardrails: metadata: failed to convert value");
-			},
-		}
-	}
-	if !acc.0.is_empty() {
-		ext.insert(acc);
-	}
-}
-
 pub(crate) async fn check_response(
 	remote: &Remote,
 	method: &str,
@@ -208,7 +184,7 @@ pub(crate) async fn check_response(
 			}
 		},
 		Some(mcp_response_result::Result::Error(e)) => {
-			Outcome::Reject(translate_error(method, backends, e).into())
+			Outcome::Reject(denial_from_error(translate_error(method, backends, e)))
 		},
 		None => on_protocol_violation(remote, method, backends, "missing result oneof"),
 	}
@@ -312,11 +288,11 @@ fn on_grpc_error<T>(
 	debug!(method, ?backends, rpc, code = ?status.code(), message = %status.message(), "mcpGuardrails: gRPC error");
 	match remote.failure_mode {
 		FailureMode::FailOpen => Outcome::Pass,
-		FailureMode::FailClosed => Outcome::Reject(ErrorData::new(
+		FailureMode::FailClosed => Outcome::Reject(denial_from_error(ErrorData::new(
 			ErrorCode::INTERNAL_ERROR,
 			format!("mcpGuardrails {rpc} failed: {}", status.message()),
 			None,
-		).into()),
+		))),
 	}
 }
 
@@ -334,11 +310,11 @@ fn on_protocol_violation<T>(
 	);
 	match remote.failure_mode {
 		FailureMode::FailOpen => Outcome::Pass,
-		FailureMode::FailClosed => Outcome::Reject(ErrorData::new(
+		FailureMode::FailClosed => Outcome::Reject(denial_from_error(ErrorData::new(
 			ErrorCode::INTERNAL_ERROR,
 			format!("mcpGuardrails protocol violation: {reason}"),
 			None,
-		).into()),
+		))),
 	}
 }
 
@@ -347,7 +323,7 @@ mod tests {
 	use prost_wkt_types::Struct as ProtoStruct;
 
 	use super::*;
-	use crate::mcp::guardrails::{McpGuardrailsDynamicMetadata, wire};
+	use crate::mcp::guardrails::{self, McpGuardrailsDynamicMetadata, wire};
 
 	fn struct_from_json(v: serde_json::Value) -> ProtoStruct {
 		serde_json::from_value(v).unwrap()
@@ -471,9 +447,9 @@ mod tests {
 	fn metadata_merge_creates_extension_and_accumulates() {
 		let mut ext = ::http::Extensions::new();
 		let first = struct_from_json(serde_json::json!({ "tenant": "acme", "tier": "gold" }));
-		merge_metadata_into_extensions("tools/call", &["be".to_string()], &first, &mut ext);
+		guardrails::merge_metadata_into_extensions("tools/call", &["be".to_string()], &first, &mut ext);
 		let second = struct_from_json(serde_json::json!({ "tier": "platinum", "extra": 1 }));
-		merge_metadata_into_extensions("tools/call", &["be".to_string()], &second, &mut ext);
+		guardrails::merge_metadata_into_extensions("tools/call", &["be".to_string()], &second, &mut ext);
 		let acc = ext
 			.get::<McpGuardrailsDynamicMetadata>()
 			.expect("extension created");

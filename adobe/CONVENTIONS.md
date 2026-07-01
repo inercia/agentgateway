@@ -29,6 +29,6 @@ Adobe **snapshot/release** images are built from [`adobe/Dockerfile`](Dockerfile
 
 Adobe container builds set the `CARGO_FEATURES` Docker build-arg (default **`agentgateway/ui,agentgateway/adobe`** in `adobe/Makefile`) so the `cargo build` step receives the package-qualified feature list. The build-arg name MUST match the Dockerfile's `ARG CARGO_FEATURES` declaration; if it does not, Docker silently drops it and the resulting binary is built without `adobe`, stripping every `#[cfg(feature = "adobe")]` block at compile time. Local testing should include `--features agentgateway/adobe` (or `cargo build -p agentgateway --features adobe`) when validating integration branches.
 
-**CEL / JSON schema (`schema/cel.json`, generated docs):** regenerate with the repo's xtask after rebases; MCPInfo includes `mcp.task` unconditionally for Ethos policy parity.
+**CEL / JSON schema (`schema/cel.json`, generated docs):** regenerate with `make generate-schema` (xtask enables `schema` + `adobe` so native `mcpGuardrails` processor types and the dynamic `mcpGuardrails.*` map appear in `schema/cel.json`). Rate-limit quota/status is exposed at `mcpGuardrails.rateLimit.*` (not a separate `guardrail` namespace). MCPInfo includes `mcp.task` unconditionally for Ethos policy parity.
 
 **Snapshot vs release:** `make snapshot` (from `adobe/`) builds with `PROFILE=quick-release`, sccache, and persistent buildx cache for faster iterative images; `make release` uses `PROFILE=release` (LTO). Override with `PROFILE=release make snapshot` when you need a prod-like snapshot build.
