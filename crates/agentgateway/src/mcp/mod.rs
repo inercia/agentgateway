@@ -96,7 +96,7 @@ pub enum Error {
 	#[error("Unknown {1}: {2}")]
 	Authorization(RequestId, String, String),
 	#[error("mcpGuardrails rejected")]
-	McpGuardrails(RequestId, crate::mcp::guardrails::Rejection),
+	McpGuardrails(RequestId, crate::mcp::guardrails::Denial),
 	#[error("failed to process session_id query parameter")]
 	InvalidSessionIdQuery,
 	#[error("failed to establish get stream: {0}")]

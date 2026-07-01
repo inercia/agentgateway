@@ -70,7 +70,7 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 
 - **MCP usage rate limiting (`mcpGuardrails` native `rateLimit` processor):** enforce per-method limits via ExtMCP against GTS — request-phase peek/check, response-phase increment for `peek` descriptors, with `failOpen` / `failClosed` when the rate-limit service is unavailable (`#[cfg(feature = "adobe")]`).
 - **Descriptor model:** CEL-evaluated descriptor entries, per-descriptor `limitOverride`, optional `peek` (check without charging on the request; charge on successful response).
-- **Denial shaping:** `rejectionOverrides` on the rate-limit processor reshape over-limit responses as JSON-RPC errors or `tools/call` `ToolResult` denials, with optional HTTP status/headers; CEL context includes `guardrail.rateLimit.*` plus request/MCP/JWT fields.
+- **Denial shaping:** `rejectionOverrides` on the rate-limit processor reshape over-limit responses as JSON-RPC errors or `tools/call` `ToolResult` denials, with optional HTTP status/headers; CEL context includes `mcpGuardrails.rateLimit.*` plus request/MCP/JWT fields.
 - **Federation:** rate-limit guardrails run on federated MCP paths (merged fanout request/response hooks) with client-facing vs upstream-facing MCP metadata preserved for response accounting.
 - **Wire / control plane:** ExtMCP rate-limit metadata on `CheckRequest` / `CheckResponse`; pair with agentlink `AIPolicy` / `AIBackend` MCP guardrails + rate-limit CRDs and GTS ExtMCP rate-limit service.
 
@@ -78,3 +78,12 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 
 - **`agentgateway_mcp_upstream_errors_total`** (Adobe-only): `server` now carries the AIBackend name; new `target` label carries the individual MCP target name.
 - **`agentgateway_mcp_request_duration_seconds`** (Adobe-only): `server` now carries the AIBackend name; new `target` label carries the individual MCP target name.
+
+## 1.2.6
+
+- **MCP rate-limit GTX pinning** (`#[cfg(feature = "adobe")]`): `mcpGuardrails` `rateLimit` ExtMCP peek/increment calls pin to the same GTX replica within one MCP request via `override_dest`, avoiding split-counter races when GTS runs with multiple pods.
+- **MCP rate-limit feature gating:** native `rateLimit` processor, descriptor/rejection config types, and enriched denial shaping compile only with `adobe`; default upstream-style builds skip rate-limit processors in xDS with a warning and use plain `ErrorData` denials over HTTP 400.
+- **Denial path split:** Adobe builds keep `Rejection` / ToolResult envelope + HTTP 200 (with optional status/header overrides); non-`adobe` builds restore upstream JSON-RPC error + HTTP 400.
+- **Rate-limit quota in CEL:** native `rateLimit` exposes `mcpGuardrails.rateLimit.*` on peek pass (GTX `McpRequestResult.metadata`) and on deny (merged from `mcp_error` before rejection). `rejectionOverrides` use the same namespace.
+- **Breaking:** removed `guardrail.rateLimit.*` CEL; update policies to `mcpGuardrails.rateLimit.*`.
+- **CEL / schema:** `mcpGuardrails` dynamic map documented in `schema/cel.json` / `schema/cel.md`; xtask schema generation enables `adobe` so native `mcpGuardrails` `rateLimit` processor types stay in `schema/config.json`.

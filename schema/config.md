@@ -303,8 +303,9 @@
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`binds[].listeners[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -2369,8 +2370,9 @@
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`binds[].listeners[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -2804,8 +2806,9 @@
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`binds[].listeners[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -4069,8 +4072,9 @@
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`binds[].listeners[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -5304,8 +5308,9 @@
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`binds[].listeners[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -7403,8 +7408,9 @@
 |`policies[].policy.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`policies[].policy.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`policies[].policy.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`policies[].policy.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -9466,8 +9472,9 @@
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -9901,8 +9908,9 @@
 |`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`backends[].ai.policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`backends[].ai.policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -11166,8 +11174,9 @@
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -12399,8 +12408,9 @@
 |`backends[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`backends[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`backends[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -13451,8 +13461,9 @@
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`routeGroups[].routes[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -15517,8 +15528,9 @@
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`routeGroups[].routes[].backends[].mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -15952,8 +15964,9 @@
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`routeGroups[].routes[].backends[].ai.policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -17217,8 +17230,9 @@
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`routeGroups[].routes[].backends[].ai.groups[].providers[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -18452,8 +18466,9 @@
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`routeGroups[].routes[].backends[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -22205,8 +22220,9 @@
 |`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`mcp.targets[].policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`mcp.targets[].policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`mcp.targets[].policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||
@@ -22405,8 +22421,9 @@
 |`mcp.policies.mcpGuardrails.processors[].descriptors[].limitOverride`|string||
 |`mcp.policies.mcpGuardrails.processors[].descriptors[].peek`|boolean||
 |`mcp.policies.mcpGuardrails.processors[].failureMode`|enum|Behavior when the peek call to the rate-limit service fails.<br>Possible values: `failClosed`, `failOpen`.|
-|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`guardrail.rateLimit.*`, plus request/mcp/jwt context.|
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides`|[]object|Reshape JSON-RPC errors when this rate-limit processor rejects. CEL context:<br>`mcpGuardrails.rateLimit.*`, plus request/mcp/jwt context.|
 |`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].when`|string||
+|`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].responseAs`|enum|JSON-RPC envelope for a rate-limit denial.<br>Possible values: `jsonRpcError`, `toolResult`.|
 |`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].status`|integer||
 |`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].body`|object||
 |`mcp.policies.mcpGuardrails.processors[].rejectionOverrides[].body.code`|integer||

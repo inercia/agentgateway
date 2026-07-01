@@ -21,6 +21,9 @@ internal_benches = ["divan"]
 glibc = []
 adobe = []
 
+[package.metadata.rust-analyzer]
+features = ["adobe"]
+
 [dependencies]
 agent-core.workspace = true
 agent-celx.workspace = true

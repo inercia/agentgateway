@@ -29,7 +29,7 @@ use crate::http::ext_proc::ExtProcDynamicMetadata;
 use crate::http::transformation_cel::TransformationMetadata;
 use crate::http::{RecordedBodyHandle, apikey, basicauth, jwt};
 use crate::llm::{LLMInfo, LLMRequest};
-use crate::mcp::guardrails::{GuardrailContext, McpGuardrailsDynamicMetadata};
+use crate::mcp::guardrails::McpGuardrailsDynamicMetadata;
 use crate::mcp::{MCPInfo, MCPTool};
 use crate::proxy::dtrace;
 use crate::serdes::schema;
@@ -72,8 +72,6 @@ pub struct Executor<'a> {
 
 	#[dynamic(rename = "mcpGuardrails")]
 	pub mcp_guardrails: ExtensionOrDirect<'a, McpGuardrailsDynamicMetadata>,
-
-	pub guardrail: Option<&'a GuardrailContext>,
 
 	pub metadata: ExtensionOrDirect<'a, TransformationMetadata>,
 }
@@ -658,10 +656,6 @@ impl<'a> Executor<'a> {
 		let mut this = Self::new_empty();
 		this.set_request(req);
 		this
-	}
-	pub fn with_guardrail(mut self, guardrail: &'a GuardrailContext) -> Self {
-		self.guardrail = Some(guardrail);
-		self
 	}
 	pub fn new_request_and_response(
 		req: &'a crate::http::Request,

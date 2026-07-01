@@ -141,7 +141,7 @@ pub enum UpstreamError {
 		resource_name: String,
 	},
 	#[error("mcpGuardrails rejected")]
-	McpGuardrails(crate::mcp::guardrails::Rejection),
+	McpGuardrails(crate::mcp::guardrails::Denial),
 	#[error("invalid request: {0}")]
 	InvalidRequest(String),
 	#[error("unsupported method: {0}")]
@@ -389,11 +389,6 @@ impl UpstreamGroup {
 			.get(name)
 			.map(|v| v.as_ref())
 			.ok_or_else(|| anyhow::anyhow!("requested target {name} is not initialized",))
-	}
-	/// Returns the stored name key if it exists in the upstream map.
-	/// Used by `parse_resource_uri` to get a stable `&str` reference.
-	pub(crate) fn get_name(&self, name: &str) -> Option<&str> {
-		self.by_name.get_key_value(name).map(|(k, _)| k.as_str())
 	}
 
 	pub(crate) fn stateful(&self) -> bool {

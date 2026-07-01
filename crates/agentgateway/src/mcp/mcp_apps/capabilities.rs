@@ -1,18 +1,22 @@
 //! Per-target cache of upstream [`ServerCapabilities`] from initialize responses.
 
+#[cfg(feature = "adobe")]
 use std::collections::HashMap;
 
+#[cfg(feature = "adobe")]
 use parking_lot::RwLock;
 use rmcp::model::ServerCapabilities;
 #[cfg(feature = "adobe")]
 use rmcp::model::TasksCapability;
 
 /// Per-target cache of [`ServerCapabilities`], populated when merging initialize results.
+#[cfg(feature = "adobe")]
 #[derive(Debug, Default)]
 pub struct TargetCapabilities {
 	capabilities: RwLock<HashMap<String, ServerCapabilities>>,
 }
 
+#[cfg(feature = "adobe")]
 impl TargetCapabilities {
 	pub fn new() -> Self {
 		Self::default()
@@ -37,7 +41,6 @@ impl TargetCapabilities {
 		self.targets_matching(all_targets, |c| c.resources.is_some())
 	}
 
-	#[cfg_attr(not(feature = "adobe"), allow(dead_code))]
 	pub fn upstreams_with_tasks(&self, all_targets: &[String]) -> Vec<String> {
 		self.targets_matching(all_targets, |c| c.tasks.is_some())
 	}

@@ -317,6 +317,9 @@ impl ProxyError {
 			ProxyError::MCP(mcp::Error::SendError(_, _)) => StatusCode::INTERNAL_SERVER_ERROR,
 			// Note: we do not return a 401/403 here, as the obscure that it was rejected due to auth
 			ProxyError::MCP(mcp::Error::Authorization(_, _, _)) => StatusCode::BAD_REQUEST,
+			#[cfg(not(feature = "adobe"))]
+			ProxyError::MCP(mcp::Error::McpGuardrails(_, _)) => StatusCode::BAD_REQUEST,
+			#[cfg(feature = "adobe")]
 			ProxyError::MCP(mcp::Error::McpGuardrails(_, _)) => StatusCode::OK,
 		};
 		let grpc_status = is_grpc_request.then(|| proxy_error_to_grpc_status(&self, code));
@@ -415,26 +418,42 @@ impl ProxyError {
 				.unwrap();
 		}
 		if let ProxyError::MCP(mcp::Error::McpGuardrails(req_id, rej)) = self {
-			let status = rej
-				.http_status
-				.and_then(|s| StatusCode::from_u16(s).ok())
-				.unwrap_or(StatusCode::OK);
-			let response_headers = rej
-				.http_headers
-				.iter()
-				.filter_map(|(name, value)| {
-					let name = hyper::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
-					let value = HeaderValue::from_str(value).ok()?;
-					Some((name, value))
+			#[cfg(not(feature = "adobe"))]
+			{
+				let msg = serde_json::to_string(&JsonRpcError {
+					jsonrpc: Default::default(),
+					id: req_id.clone(),
+					error: rej.clone(),
 				})
-				.collect::<Vec<_>>();
-			let msg = serde_json::to_string(&rej.to_server_json_rpc_message(req_id.clone()))
 				.unwrap_or_default();
-			rb = rb.status(status).header("content-type", "application/json");
-			for (name, value) in response_headers {
-				rb = rb.header(name, value);
+				return rb
+					.header("content-type", "application/json")
+					.body(http::Body::from(msg))
+					.unwrap();
 			}
-			return rb.body(http::Body::from(msg)).unwrap();
+			#[cfg(feature = "adobe")]
+			{
+				let status = rej
+					.http_status
+					.and_then(|s| StatusCode::from_u16(s).ok())
+					.unwrap_or(StatusCode::OK);
+				let response_headers = rej
+					.http_headers
+					.iter()
+					.filter_map(|(name, value)| {
+						let name = hyper::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
+						let value = HeaderValue::from_str(value).ok()?;
+						Some((name, value))
+					})
+					.collect::<Vec<_>>();
+				let msg = serde_json::to_string(&rej.to_server_json_rpc_message(req_id.clone()))
+					.unwrap_or_default();
+				rb = rb.status(status).header("content-type", "application/json");
+				for (name, value) in response_headers {
+					rb = rb.header(name, value);
+				}
+				return rb.body(http::Body::from(msg)).unwrap();
+			}
 		}
 
 		rb.header(hyper::header::CONTENT_TYPE, "text/plain")
@@ -598,6 +617,7 @@ mod tests {
 		assert!(response.headers().get("grpc-status").is_none());
 	}
 
+	#[cfg(feature = "adobe")]
 	#[test]
 	fn mcp_guardrails_error_defaults_to_http_200_json_rpc_error() {
 		use crate::mcp::guardrails::Rejection;
@@ -617,6 +637,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "adobe")]
 	#[test]
 	fn mcp_guardrails_error_applies_response_header_overrides() {
 		use crate::mcp::guardrails::Rejection;
@@ -643,6 +664,7 @@ mod tests {
 		);
 	}
 
+	#[cfg(feature = "adobe")]
 	#[test]
 	fn mcp_guardrails_tool_result_serializes_result_not_error() {
 		use crate::mcp::guardrails::{McpDenialEnvelope, Rejection};
@@ -662,6 +684,25 @@ mod tests {
 		assert!(json.get("error").is_none());
 		assert_eq!(json["result"]["isError"], true);
 		assert_eq!(json["result"]["content"][0]["text"], "quota exceeded");
+	}
+
+	#[cfg(not(feature = "adobe"))]
+	#[test]
+	fn mcp_guardrails_error_uses_http_400_json_rpc_error() {
+		use rmcp::model::{ErrorCode, ErrorData};
+
+		let err = ProxyError::MCP(crate::mcp::Error::McpGuardrails(
+			rmcp::model::RequestId::Number(1),
+			ErrorData::new(ErrorCode(-32003), "rate limit exceeded", None),
+		));
+
+		let response = err.into_response_with_grpc(false);
+
+		assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+		assert_eq!(
+			response.headers().get(hyper::header::CONTENT_TYPE).unwrap(),
+			"application/json"
+		);
 	}
 
 	#[test]
