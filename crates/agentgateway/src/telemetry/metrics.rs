@@ -672,6 +672,8 @@ pub(crate) mod adobe_metrics {
 			| UpstreamError::InvalidRequest(_)
 			| UpstreamError::InvalidMethod(_)
 			| UpstreamError::InvalidMethodWithMultiplexing(_) => return None,
+			#[cfg(feature = "adobe")]
+			UpstreamError::FanoutError { source, .. } => return classify_upstream_error(source),
 		})
 	}
 }
