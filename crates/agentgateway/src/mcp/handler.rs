@@ -1075,6 +1075,15 @@ impl Relay {
 					if self.upstreams.failure_mode == FailureMode::FailOpen {
 						warn!("upstream '{}' failed during fanout, skipping: {}", name, e);
 					} else {
+						#[cfg(feature = "adobe")]
+						{
+							warn!("upstream '{}' failed during fanout (fail-closed): {}", name, e);
+							return Err(UpstreamError::FanoutError {
+								name: name.to_string(),
+								source: Box::new(e),
+							});
+						}
+						#[cfg(not(feature = "adobe"))]
 						return Err(e);
 					}
 				},
@@ -1357,6 +1366,15 @@ impl Relay {
 					if self.upstreams.failure_mode == FailureMode::FailOpen {
 						warn!("upstream '{}' failed during fanout, skipping: {}", name, e);
 					} else {
+						#[cfg(feature = "adobe")]
+						{
+							warn!("upstream '{}' failed during fanout (fail-closed): {}", name, e);
+							return Err(UpstreamError::FanoutError {
+								name: name.to_string(),
+								source: Box::new(e),
+							});
+						}
+						#[cfg(not(feature = "adobe"))]
 						return Err(e);
 					}
 				},

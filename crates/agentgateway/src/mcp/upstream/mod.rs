@@ -140,6 +140,12 @@ pub enum UpstreamError {
 		resource_type: String,
 		resource_name: String,
 	},
+	#[cfg(feature = "adobe")]
+	#[error("target '{name}': {source}")]
+	FanoutError {
+		name: String,
+		source: Box<UpstreamError>,
+	},
 	#[error("mcpGuardrails rejected")]
 	McpGuardrails(crate::mcp::guardrails::Denial),
 	#[error("invalid request: {0}")]

@@ -1569,6 +1569,35 @@ async fn mock_streamable_http_server_failing_tools_call(status: ::http::StatusCo
 	}
 }
 
+/// Mock that responds to every HTTP request (including the MCP `initialize`
+/// POST) with the given status code.  Used to test FailClosed fanout
+/// status-code passthrough without involving a real MCP server.
+#[cfg(feature = "adobe")]
+async fn mock_streamable_http_server_failing_initialize(status: ::http::StatusCode) -> MockServer {
+	agent_core::telemetry::testing::setup_test_logging();
+	let init_counter = std::sync::Arc::new(tokio::sync::Mutex::new(0_i32));
+	let (tx, rx) = tokio::sync::oneshot::channel();
+	let router = axum::Router::new().fallback(axum::routing::any(move || async move {
+		::http::Response::builder()
+			.status(status)
+			.body(axum::body::Body::from(format!("upstream error {status}")))
+			.unwrap()
+	}));
+	let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let addr = tcp_listener.local_addr().unwrap();
+	tokio::spawn(async move {
+		let _ = axum::serve(tcp_listener, router)
+			.with_graceful_shutdown(async { rx.await.unwrap() })
+			.await;
+		info!("failing-initialize server stopped");
+	});
+	MockServer {
+		addr,
+		init_counter,
+		_cancel: tx,
+	}
+}
+
 async fn mock_sse_server() -> MockServer {
 	use legacy_rmcp::transport::sse_server::{SseServer, SseServerConfig};
 	use tokio_util::sync::CancellationToken;
@@ -7865,6 +7894,82 @@ mod upstream_error_tests {
 			),
 			"federation dead-target tools/call did not emit mcp_upstream_errors_total \
 			 with server=mcp target=server-a method=tools/call; got:\n{out}"
+		);
+	}
+
+	/// F1 — FailClosed fanout: when one target is unreachable the error surfaced
+	/// to the MCP client must include the target name so operators can identify
+	/// the failing backend from the access log alone.
+	#[cfg(feature = "adobe")]
+	#[tokio::test]
+	async fn fail_closed_fanout_error_includes_target_name() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server(true).await;
+		let b_addr = mock_b.addr;
+		drop(mock_b); // connection refused during fanout initialize
+
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("server-a", mock_a.addr, false),
+					("server-b", b_addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+
+		let err = try_mcp_streamable_client(io)
+			.await
+			.expect_err("FailClosed initialize should fail when server-b is dead");
+		let err_msg = err.to_string();
+		assert!(
+			err_msg.contains("server-b"),
+			"FailClosed fanout error should name the failing target; got: {err_msg}"
+		);
+	}
+
+	/// F2 — FailClosed fanout: when one target returns a real HTTP error
+	/// status during `initialize`, that status must be forwarded to the MCP
+	/// client rather than being converted to a generic 500.
+	#[cfg(feature = "adobe")]
+	#[tokio::test]
+	async fn fail_closed_fanout_preserves_upstream_status_code() {
+		let mock_a = mock_streamable_http_server(true).await;
+		let mock_b = mock_streamable_http_server_failing_initialize(
+			::http::StatusCode::SERVICE_UNAVAILABLE,
+		)
+		.await;
+
+		let t = setup_proxy_test("{}")
+			.unwrap()
+			.with_multiplex_mcp_backend(
+				"mcp",
+				vec![
+					("server-a", mock_a.addr, false),
+					("server-b", mock_b.addr, false),
+				],
+				true,
+			)
+			.with_bind(simple_bind())
+			.with_route(basic_named_route(strng::new("/mcp")));
+		let io = t.serve_real_listener(strng::new("bind")).await;
+
+		let err = try_mcp_streamable_client(io)
+			.await
+			.expect_err("FailClosed initialize should fail when server-b returns 503");
+		let err_msg = err.to_string();
+		// The discriminator is the *transport* status, not the substring "503":
+		// without the passthrough fix the 503 is swallowed into a JSON-RPC
+		// -32603 internal error (transport HTTP 500) whose text still mentions
+		// "503". With the fix the client sees a real transport-level HTTP 503.
+		assert!(
+			err_msg.contains("HTTP 503") && !err_msg.contains("-32603"),
+			"FailClosed fanout should surface a transport-level HTTP 503, not a \
+			 generic JSON-RPC 500; got: {err_msg}"
 		);
 	}
 
