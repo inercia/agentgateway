@@ -3492,7 +3492,7 @@ async fn mcp_guardrails_native_rate_limit_rejection_override_uses_limit_payload(
 
 	use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
 
-	let gtx = closure_mock(
+	let extmcp_mock = closure_mock(
 		|_| {
 			Ok(McpRequestResult {
 				result: Some(mcp_request_result::Result::Error(AuthorizationError {
@@ -3527,7 +3527,7 @@ async fn mcp_guardrails_native_rate_limit_rejection_override_uses_limit_payload(
 	.spawn()
 	.await;
 	let policy = guardrails_test_support::rate_limit_policy(
-		gtx.address,
+		extmcp_mock.address,
 		vec![guardrails_test_support::rejection_override(
 			"has(mcpGuardrails.rateLimit.limit)",
 			-32001,
@@ -3549,6 +3549,7 @@ async fn mcp_guardrails_native_rate_limit_rejection_override_uses_limit_payload(
 	};
 	assert_eq!(e.code.0, -32001);
 	assert_eq!(e.message.as_ref(), "retry after 42");
+	assert!(e.data.is_none(), "AuthorizationError.mcp_error must not be exposed in error.data");
 }
 
 #[cfg(feature = "adobe")]
@@ -3578,7 +3579,7 @@ async fn mcp_guardrails_native_rate_limit_peek_exposes_quota_on_pass() {
 	}))
 	.unwrap();
 
-	let gtx = closure_mock(
+	let extmcp_mock = closure_mock(
 		move |_| {
 			pass_request_with(
 				Vec::<(&str, &str)>::new(),
@@ -3618,7 +3619,7 @@ async fn mcp_guardrails_native_rate_limit_peek_exposes_quota_on_pass() {
 	let target_policy = BackendTrafficPolicy::Transformation(Arc::new(xfm));
 
 	let policy = guardrails_test_support::rate_limit_policy_with_entry(
-		gtx.address,
+		extmcp_mock.address,
 		"tool",
 		"mcp.tool.name",
 		Vec::new(),
@@ -3669,7 +3670,7 @@ async fn mcp_guardrails_native_rate_limit_increment_runs_after_success() {
 	use tokio::time::{Duration, timeout};
 
 	let (tx, mut rx) = mpsc::unbounded_channel();
-	let gtx = crate::test_helpers::extmcpmock::closure_mock(
+	let extmcp_mock = crate::test_helpers::extmcpmock::closure_mock(
 		{
 			let tx = tx.clone();
 			move |req| {
@@ -3693,7 +3694,7 @@ async fn mcp_guardrails_native_rate_limit_increment_runs_after_success() {
 	.spawn()
 	.await;
 	let policy = guardrails_test_support::rate_limit_policy_with_entry(
-		gtx.address,
+		extmcp_mock.address,
 		"method",
 		"mcp.methodName",
 		Vec::new(),
@@ -3733,7 +3734,7 @@ async fn mcp_guardrails_native_rate_limit_non_peek_increments_on_request_only() 
 	use tokio::time::{Duration, timeout};
 
 	let (tx, mut rx) = mpsc::unbounded_channel();
-	let gtx = crate::test_helpers::extmcpmock::closure_mock(
+	let extmcp_mock = crate::test_helpers::extmcpmock::closure_mock(
 		{
 			let tx = tx.clone();
 			move |req| {
@@ -3757,7 +3758,7 @@ async fn mcp_guardrails_native_rate_limit_non_peek_increments_on_request_only() 
 	.spawn()
 	.await;
 	let policy = guardrails_test_support::rate_limit_policy_with_entry_and_peek(
-		gtx.address,
+		extmcp_mock.address,
 		"method",
 		"mcp.methodName",
 		false,
@@ -3787,7 +3788,7 @@ async fn mcp_guardrails_native_rate_limit_non_peek_increments_on_request_only() 
 		timeout(Duration::from_millis(200), rx.recv())
 			.await
 			.is_err(),
-		"non-peek descriptors must not trigger a second GTX call"
+		"non-peek descriptors must not trigger a second ExtMCP call"
 	);
 }
 
@@ -3798,7 +3799,7 @@ async fn mcp_guardrails_native_rate_limit_skips_increment_on_jsonrpc_error() {
 	use tokio::time::{Duration, timeout};
 
 	let (tx, mut rx) = mpsc::unbounded_channel();
-	let gtx = crate::test_helpers::extmcpmock::closure_mock(
+	let extmcp_mock = crate::test_helpers::extmcpmock::closure_mock(
 		{
 			let tx = tx.clone();
 			move |req| {
@@ -3822,7 +3823,7 @@ async fn mcp_guardrails_native_rate_limit_skips_increment_on_jsonrpc_error() {
 	.spawn()
 	.await;
 	let policy = guardrails_test_support::rate_limit_policy_with_entry(
-		gtx.address,
+		extmcp_mock.address,
 		"method",
 		"mcp.methodName",
 		Vec::new(),

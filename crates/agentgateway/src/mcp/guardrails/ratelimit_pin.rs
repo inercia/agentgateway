@@ -1,4 +1,4 @@
-//! Request-scoped GTX pinning for MCP guardrails rateLimit peek/increment.
+//! Request-scoped ExtMCP backend pinning for MCP guardrails rateLimit peek/increment.
 //!
 //! Adobe-only: uses public `PolicyClient` APIs so we do not patch shared proxy code.
 #![cfg(feature = "adobe")]
@@ -20,9 +20,9 @@ use crate::proxy::httpproxy::PolicyClient;
 use crate::proxy::{resolve_simple_backend, ProxyError};
 use crate::types::agent::{BackendTrafficPolicy, SimpleBackendReference};
 
-/// GTX backend chosen at rate-limit peek; reused for increment on the same MCP request.
+/// ExtMCP rate-limit backend chosen at peek; reused for increment on the same MCP request.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RateLimitGtxPin(pub SocketAddr);
+pub(crate) struct RateLimitExtMcpPin(pub SocketAddr);
 
 pub(crate) fn channel_for(
 	rate_limit: &RateLimit,

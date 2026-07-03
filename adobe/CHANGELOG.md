@@ -81,9 +81,15 @@ agentgateway:v0.12.0-722-g31bd70fe-dirty-adobe-1.0.0-amd64
 
 ## 1.2.6
 
-- **MCP rate-limit GTX pinning** (`#[cfg(feature = "adobe")]`): `mcpGuardrails` `rateLimit` ExtMCP peek/increment calls pin to the same GTX replica within one MCP request via `override_dest`, avoiding split-counter races when GTS runs with multiple pods.
+- **MCP rate-limit ExtMCP backend pinning** (`#[cfg(feature = "adobe")]`): `mcpGuardrails` `rateLimit` ExtMCP peek/increment calls pin to the same rate-limit backend replica within one MCP request via `override_dest`, avoiding split-counter races when the service runs with multiple pods.
 - **MCP rate-limit feature gating:** native `rateLimit` processor, descriptor/rejection config types, and enriched denial shaping compile only with `adobe`; default upstream-style builds skip rate-limit processors in xDS with a warning and use plain `ErrorData` denials over HTTP 400.
 - **Denial path split:** Adobe builds keep `Rejection` / ToolResult envelope + HTTP 200 (with optional status/header overrides); non-`adobe` builds restore upstream JSON-RPC error + HTTP 400.
-- **Rate-limit quota in CEL:** native `rateLimit` exposes `mcpGuardrails.rateLimit.*` on peek pass (GTX `McpRequestResult.metadata`) and on deny (merged from `mcp_error` before rejection). `rejectionOverrides` use the same namespace.
+- **Rate-limit quota in CEL:** native `rateLimit` exposes `mcpGuardrails.rateLimit.*` on peek pass (ExtMCP `McpRequestResult.metadata`) and on deny (merged from `AuthorizationError.mcp_error` before rejection). `rejectionOverrides` use the same namespace.
 - **Breaking:** removed `guardrail.rateLimit.*` CEL; update policies to `mcpGuardrails.rateLimit.*`.
 - **CEL / schema:** `mcpGuardrails` dynamic map documented in `schema/cel.json` / `schema/cel.md`; xtask schema generation enables `adobe` so native `mcpGuardrails` `rateLimit` processor types stay in `schema/config.json`.
+
+## 1.2.7
+
+- **JWT auth: preserve credentials on Adobe builds** (`#[cfg(feature = "adobe")]`): after successful JWT validation, upstream agentgateway removes the token from the request (Authorization header or query `token` param). Adobe builds keep the credential on the wire so downstream filters and MCP upstream targets can forward the validated JWT to backends. Non-`adobe` builds retain upstream strip behavior.
+- **MCP rate-limit denials: strip internal ExtMCP metadata from client responses** (`#[cfg(feature = "adobe")]`): when the rate-limit service returns quota metadata in `AuthorizationError.mcp_error`, Agent Gateway still merges it into request extensions for CEL (`mcpGuardrails.rateLimit.*` on deny) but no longer exposes that blob in JSON-RPC `error.data` sent to MCP clients — including default over-limit denials and `rejectionOverrides` JsonRpcError paths. Clients see code + message only; operators can still use limit fields in override CEL.
+- **Rollout:** requires `feature = "adobe"` (Docker `CARGO_FEATURES=agentgateway/adobe,...`). JWT/SSE touchpoint: `crates/agentgateway/src/http/jwt.rs`. MCP guardrails touchpoint: `mcp/guardrails/ratelimit.rs`, `maybe_override_rejection`.

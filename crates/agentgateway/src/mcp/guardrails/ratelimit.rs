@@ -14,7 +14,7 @@ use crate::http::remoteratelimit::proto;
 use crate::mcp::guardrails::wire::ext_mcp_client::ExtMcpClient;
 use crate::mcp::guardrails::wire::authorization_error::Code as AuthCode;
 use crate::mcp::guardrails::wire::{AuthorizationError, McpRequest, McpRequestResult, McpResponse, mcp_request_result};
-use crate::mcp::guardrails::ratelimit_pin::{self, RateLimitGtxPin};
+use crate::mcp::guardrails::ratelimit_pin::{self, RateLimitExtMcpPin};
 use crate::mcp::guardrails::{FailureMode, McpGuardrailsDynamicMetadata, Outcome, RateLimit, RateLimitDescriptor as ConfigDescriptor, build_mcp_info, client, denial_from_error, merge_metadata_into_extensions};
 use crate::mcp::upstream::IncomingRequestContext;
 use crate::proxy::httpproxy::PolicyClient;
@@ -27,7 +27,7 @@ struct DescriptorLimitOverride {
 	requests_per_unit: u32,
 }
 
-/// Merge a parsed GTX rate-limit status object as `mcpGuardrails.rateLimit`.
+/// Merge a parsed ExtMCP rate-limit status object as `mcpGuardrails.rateLimit`.
 pub(crate) fn merge_rate_limit_status_into_extensions(
 	method: &str,
 	backends: &[String],
@@ -45,7 +45,7 @@ pub(crate) fn merge_rate_limit_status_into_extensions(
 	ext.insert(acc);
 }
 
-/// Parse GTX `mcp_error` bytes and expose as `mcpGuardrails.rateLimit` before rejection.
+/// Parse ExtMCP `AuthorizationError.mcp_error` bytes and expose as `mcpGuardrails.rateLimit` before rejection.
 pub(crate) fn merge_rate_limit_mcp_error_into_extensions(
 	method: &str,
 	backends: &[String],
@@ -98,7 +98,7 @@ pub(crate) async fn check_request<P>(
 	} = resp;
 	let store_pin = |req_ctx: &mut IncomingRequestContext| {
 		if let Some(pin) = capture.lock().unwrap().take() {
-			req_ctx.extensions_mut().insert(RateLimitGtxPin(pin));
+			req_ctx.extensions_mut().insert(RateLimitExtMcpPin(pin));
 		}
 	};
 	match result {
@@ -149,7 +149,7 @@ pub(crate) async fn check_response(
 	let Some(metadata_context) = build_metadata(rate_limit, &req, Some(&mcp), Phase::Response) else {
 		return Outcome::Pass;
 	};
-	let override_dest = req_ctx.extensions().get::<RateLimitGtxPin>().map(|p| p.0);
+	let override_dest = req_ctx.extensions().get::<RateLimitExtMcpPin>().map(|p| p.0);
 	let grpc_channel = ratelimit_pin::channel_for(
 		rate_limit,
 		client.clone(),
@@ -328,6 +328,10 @@ fn eval_limit_override(
 	})))
 }
 
+fn client_denial_error(method: &str, backends: &[String], e: AuthorizationError) -> ErrorData {
+	super::strip_client_error_data(client::translate_error(method, backends, e))
+}
+
 fn on_inband_service_error<T>(
 	rate_limit: &RateLimit,
 	method: &str,
@@ -346,12 +350,12 @@ fn on_inband_service_error<T>(
 	let code = AuthCode::try_from(e.code).unwrap_or(AuthCode::Unknown);
 	match code {
 		AuthCode::ResourceExhausted | AuthCode::PermissionDenied => {
-			Outcome::Reject(denial_from_error(client::translate_error(method, backends, e)))
+			Outcome::Reject(denial_from_error(client_denial_error(method, backends, e)))
 		},
 		AuthCode::Unknown | AuthCode::Invalid => match rate_limit.failure_mode {
 			FailureMode::FailOpen => Outcome::Pass,
 			FailureMode::FailClosed => {
-				Outcome::Reject(denial_from_error(client::translate_error(method, backends, e)))
+				Outcome::Reject(denial_from_error(client_denial_error(method, backends, e)))
 			},
 		},
 	}
@@ -471,8 +475,8 @@ mod tests {
 		use crate::test_helpers::extmcpmock::{closure_mock, pass_response, reject_request};
 		use protos::ext_mcp::authorization_error::Code;
 
-		let gtx = closure_mock(
-			|_| reject_request(Code::Unknown, "gtx unavailable"),
+		let extmcp_mock = closure_mock(
+			|_| reject_request(Code::Unknown, "rate limit service unavailable"),
 			|_| pass_response(),
 		)
 		.spawn()
@@ -484,7 +488,7 @@ mod tests {
 		);
 		let rate_limit = RateLimit {
 			target: Arc::new(SimpleBackendReference::InlineBackend(
-				crate::types::agent::Target::Address(gtx.address),
+				crate::types::agent::Target::Address(extmcp_mock.address),
 			)),
 			..rate_limit_with_failure_mode(FailureMode::FailOpen)
 		};
@@ -509,7 +513,7 @@ mod tests {
 		use crate::test_helpers::extmcpmock::{closure_mock, pass_response, reject_request};
 		use protos::ext_mcp::authorization_error::Code;
 
-		let gtx = closure_mock(
+		let extmcp_mock = closure_mock(
 			|_| reject_request(Code::ResourceExhausted, "quota exhausted"),
 			|_| pass_response(),
 		)
@@ -522,7 +526,7 @@ mod tests {
 		);
 		let rate_limit = RateLimit {
 			target: Arc::new(SimpleBackendReference::InlineBackend(
-				crate::types::agent::Target::Address(gtx.address),
+				crate::types::agent::Target::Address(extmcp_mock.address),
 			)),
 			..rate_limit_with_failure_mode(FailureMode::FailOpen)
 		};
@@ -540,6 +544,79 @@ mod tests {
 		.await;
 
 		assert!(matches!(outcome, Outcome::Reject(_)));
+	}
+
+	#[tokio::test]
+	async fn default_denial_strips_mcp_error_from_client_payload() {
+		use protos::ext_mcp::authorization_error::Code;
+		use protos::ext_mcp::{AuthorizationError, McpRequestResult, mcp_request_result};
+		use rmcp::model::ErrorCode;
+
+		use crate::mcp::guardrails::McpDenialEnvelope;
+		use crate::test_helpers::extmcpmock::{closure_mock, pass_response};
+
+		let extmcp_mock = closure_mock(
+			|_| {
+				Ok(McpRequestResult {
+					result: Some(mcp_request_result::Result::Error(AuthorizationError {
+						code: Code::ResourceExhausted as i32,
+						reason: "rate limit exceeded".to_string(),
+						mcp_error: Some(
+							serde_json::to_vec(&serde_json::json!({
+								"domain": "mcp_api",
+								"overallCode": "OVER_LIMIT",
+							}))
+							.unwrap()
+							.into(),
+						),
+					})),
+					header_mutation: None,
+					metadata: None,
+				})
+			},
+			|_| pass_response(),
+		)
+		.spawn()
+		.await;
+		let client = PolicyClient::new(
+			crate::test_helpers::proxymock::setup_proxy_test("{}")
+				.unwrap()
+				.pi,
+		);
+		let rate_limit = RateLimit {
+			target: Arc::new(SimpleBackendReference::InlineBackend(
+				crate::types::agent::Target::Address(extmcp_mock.address),
+			)),
+			..rate_limit_with_failure_mode(FailureMode::FailClosed)
+		};
+		let body = bytes::Bytes::from_static(br#"{"name":"echo"}"#);
+		let mut req_ctx = IncomingRequestContext::empty();
+
+		let outcome: Outcome<()> = check_request(
+			&rate_limit,
+			crate::mcp::guardrails::methods::TOOLS_CALL,
+			&["mcp".to_string()],
+			Some(&body),
+			&mut req_ctx,
+			&client,
+		)
+		.await;
+
+		let Outcome::Reject(rej) = outcome else {
+			panic!("expected reject, got {outcome:?}");
+		};
+		let McpDenialEnvelope::JsonRpc(error) = rej.envelope else {
+			panic!("expected JsonRpc envelope");
+		};
+		assert_eq!(error.code, ErrorCode(-32003));
+		assert_eq!(error.message.as_ref(), "rate limit exceeded");
+		assert!(error.data.is_none(), "AuthorizationError.mcp_error must not be exposed in error.data");
+		// CEL extensions still receive the merged payload.
+		let meta = req_ctx
+			.extensions()
+			.get::<McpGuardrailsDynamicMetadata>()
+			.expect("rateLimit metadata");
+		assert!(meta.0.contains_key("rateLimit"));
 	}
 
 	#[test]
@@ -605,15 +682,15 @@ mod tests {
 
 		use super::*;
 
-		fn two_replica_gtx_service(
+		fn two_replica_extmcp_rate_limit_service(
 			pi: &Arc<crate::ProxyInputs>,
 			addr_a: SocketAddr,
 			addr_b: SocketAddr,
 		) -> SimpleBackendReference {
 			let svc = Service {
-				name: strng::literal!("gtx"),
+				name: strng::literal!("ratelimit-extmcp"),
 				namespace: strng::literal!("default"),
-				hostname: strng::literal!("gtx.default.svc.cluster.local"),
+				hostname: strng::literal!("ratelimit-extmcp.default.svc.cluster.local"),
 				vips: vec![NetworkAddress {
 					network: strng::EMPTY,
 					address: addr_a.ip(),
@@ -624,26 +701,26 @@ mod tests {
 			let wl_a = LocalWorkload {
 				workload: Workload {
 					uid: strng::literal!("wl-a"),
-					name: strng::literal!("gtx-a"),
+					name: strng::literal!("ratelimit-a"),
 					namespace: strng::literal!("default"),
 					workload_ips: vec![addr_a.ip()],
 					..Default::default()
 				},
 				services: HashMap::from([(
-					"default/gtx.default.svc.cluster.local".to_string(),
+					"default/ratelimit-extmcp.default.svc.cluster.local".to_string(),
 					HashMap::from([(80, addr_a.port())]),
 				)]),
 			};
 			let wl_b = LocalWorkload {
 				workload: Workload {
 					uid: strng::literal!("wl-b"),
-					name: strng::literal!("gtx-b"),
+					name: strng::literal!("ratelimit-b"),
 					namespace: strng::literal!("default"),
 					workload_ips: vec![addr_b.ip()],
 					..Default::default()
 				},
 				services: HashMap::from([(
-					"default/gtx.default.svc.cluster.local".to_string(),
+					"default/ratelimit-extmcp.default.svc.cluster.local".to_string(),
 					HashMap::from([(80, addr_b.port())]),
 				)]),
 			};
@@ -654,7 +731,7 @@ mod tests {
 			SimpleBackendReference::Service {
 				name: NamespacedHostname {
 					namespace: strng::literal!("default"),
-					hostname: strng::literal!("gtx.default.svc.cluster.local"),
+					hostname: strng::literal!("ratelimit-extmcp.default.svc.cluster.local"),
 				},
 				port: 80,
 			}
@@ -682,7 +759,7 @@ mod tests {
 		}
 
 		#[tokio::test]
-		async fn peek_and_increment_pin_to_same_gtx_replica() {
+		async fn peek_and_increment_pin_to_same_extmcp_replica() {
 			let addr_a: SocketAddr = "127.0.0.1:37101".parse().unwrap();
 			let addr_b: SocketAddr = "127.0.0.1:37102".parse().unwrap();
 			let hits: Arc<Mutex<Vec<SocketAddr>>> = Arc::new(Mutex::new(Vec::new()));
@@ -694,7 +771,7 @@ mod tests {
 			let _inst_b = mock_b.spawn_on(addr_b).await;
 
 			let t = crate::test_helpers::proxymock::setup_proxy_test("{}").unwrap();
-			let backend_ref = two_replica_gtx_service(&t.pi, addr_a, addr_b);
+			let backend_ref = two_replica_extmcp_rate_limit_service(&t.pi, addr_a, addr_b);
 			let client = PolicyClient::new(t.pi);
 			let rate_limit = RateLimit {
 				target: Arc::new(backend_ref),
@@ -746,7 +823,7 @@ mod tests {
 				2,
 				"expected peek + increment RPCs"
 			);
-			assert_eq!(hits.len(), 2, "expected two recorded GTX addresses");
+			assert_eq!(hits.len(), 2, "expected two recorded ExtMCP backend addresses");
 			assert_eq!(
 				hits[0], hits[1],
 				"peek and increment must hit the same pinned replica"
