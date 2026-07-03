@@ -528,11 +528,19 @@ pub async fn test_apply_permissive_valid_token_inserts_claims_and_removes_header
 	let mut log = make_min_req_log();
 	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(res.is_ok());
+	#[cfg(not(feature = "adobe"))]
 	assert!(
 		req
 			.headers()
 			.get(crate::http::header::AUTHORIZATION)
 			.is_none()
+	);
+	#[cfg(feature = "adobe")]
+	assert!(
+		req
+			.headers()
+			.get(crate::http::header::AUTHORIZATION)
+			.is_some()
 	);
 	assert!(req.extensions().get::<super::Claims>().is_some());
 }
@@ -595,11 +603,19 @@ pub async fn test_apply_optional_valid_token_inserts_claims_and_removes_header()
 	let mut log = make_min_req_log();
 	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(res.is_ok());
+	#[cfg(not(feature = "adobe"))]
 	assert!(
 		req
 			.headers()
 			.get(crate::http::header::AUTHORIZATION)
 			.is_none()
+	);
+	#[cfg(feature = "adobe")]
+	assert!(
+		req
+			.headers()
+			.get(crate::http::header::AUTHORIZATION)
+			.is_some()
 	);
 	assert!(req.extensions().get::<super::Claims>().is_some());
 }
@@ -628,7 +644,13 @@ pub async fn test_apply_query_parameter_token_inserts_claims_and_removes_query_p
 	let mut log = make_min_req_log();
 	let res = jwt.apply(Some(&mut log), &mut req).await;
 	assert!(res.is_ok());
+	#[cfg(not(feature = "adobe"))]
 	assert_eq!(req.uri().to_string(), "http://example.com/?keep=yes");
+	#[cfg(feature = "adobe")]
+	assert_eq!(
+		req.uri().to_string(),
+		format!("http://example.com/?token={token}&keep=yes")
+	);
 	assert!(req.extensions().get::<super::Claims>().is_some());
 }
 

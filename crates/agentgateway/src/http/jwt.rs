@@ -540,7 +540,9 @@ impl Jwt {
 		{
 			log.jwt_sub = Some(sub.to_string());
 		};
-		// Remove the token.
+		// Upstream strips the credential after validation. Adobe builds keep it on the
+		// request so filters and MCP upstream targets can forward the validated JWT.
+		#[cfg(not(feature = "adobe"))]
 		self
 			.location
 			.remove(req)

@@ -424,6 +424,12 @@ impl Processor {
 	}
 }
 
+/// ExtMCP `AuthorizationError.mcp_error` is merged into request extensions for CEL; it must not be forwarded to clients.
+#[cfg(feature = "adobe")]
+pub(crate) fn strip_client_error_data(error: ErrorData) -> ErrorData {
+	ErrorData::new(error.code, error.message.clone(), None)
+}
+
 #[cfg(feature = "adobe")]
 fn maybe_override_rejection(
 	processor: &Processor,
@@ -458,7 +464,7 @@ fn maybe_override_rejection(
 					envelope: McpDenialEnvelope::JsonRpc(ErrorData::new(
 						rej.code,
 						rej.message.clone(),
-						rej.data.clone(),
+						None,
 					)),
 					http_status,
 					http_headers,
@@ -495,13 +501,13 @@ fn maybe_override_rejection(
 			envelope: McpDenialEnvelope::JsonRpc(ErrorData::new(
 				rmcp::model::ErrorCode(code),
 				message,
-				rej.data.clone(),
+				None,
 			)),
 			http_status,
 			http_headers,
 		};
 	}
-	rej.into()
+	strip_client_error_data(rej).into()
 }
 
 /// Processors fire in order; first `Reject` short-circuits leaving `ctx` in whatever
@@ -975,5 +981,57 @@ processors:
 		};
 		assert_eq!(error.code, ErrorCode(-32001));
 		assert_eq!(error.message.as_ref(), "retry after 42");
+		assert!(error.data.is_none(), "AuthorizationError.mcp_error must not be exposed in error.data");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn rejection_override_strips_internal_mcp_error_data() {
+		use rmcp::model::ErrorCode;
+		use serde_json::json;
+
+		let ext = McpGuardrails {
+			processors: vec![Processor {
+				methods: HashMap::new(),
+				kind: ProcessorKind::RateLimit(RateLimit {
+					domain: "mcp".to_string(),
+					target: Arc::new(SimpleBackendReference::Backend("unused".into())),
+					policies: Vec::new(),
+					failure_mode: FailureMode::FailClosed,
+					descriptors: Arc::new(RateLimitDescriptorSet(Vec::new())),
+					rejection_overrides: vec![RateLimitRejectionOverride {
+						when: Arc::new(cel::Expression::new_strict("true").unwrap()),
+						response_as: RejectionResponseAs::default(),
+						status: Some(401),
+						body: Some(RateLimitRejectionOverrideBody {
+							code: Some(-32013),
+							message: Some(Arc::new(
+								cel::Expression::new_strict(r#""auth required""#).unwrap(),
+							)),
+						}),
+						headers: Vec::new(),
+					}],
+				}),
+			}],
+		};
+		let processor = &ext.processors[0];
+		let req_ctx = IncomingRequestContext::empty();
+		let original = ErrorData::new(
+			ErrorCode(-32003),
+			"rate limit exceeded",
+			Some(json!({
+				"domain": "mcp_api",
+				"overallCode": "OVER_LIMIT",
+			})),
+		);
+
+		let overridden = maybe_override_rejection(processor, "tools/call", &req_ctx, None, original);
+
+		let McpDenialEnvelope::JsonRpc(error) = overridden.envelope else {
+			panic!("expected JsonRpc envelope");
+		};
+		assert_eq!(error.code, ErrorCode(-32013));
+		assert_eq!(error.message.as_ref(), "auth required");
+		assert!(error.data.is_none());
 	}
 }
