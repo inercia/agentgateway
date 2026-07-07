@@ -1,0 +1,7 @@
+# Mandatory
+# List of deploy repositories which are used to define the configs for this application repository
+deploy_repositories:
+  # Mandatory
+  # Complete name of Git Repository
+  # Ex: Git_Org/Git_Repo
+- name: adobe-apis/cgw-pipelines-deploy

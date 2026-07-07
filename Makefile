@@ -63,6 +63,13 @@ test:
 test-release:
 	cargo test --profile quick-release --all-targets
 
+.PHONY: ci
+ci: test
+
+.PHONY: noop
+noop:
+	@echo "no-op: releases are cut manually, not via CI"
+
 # clean
 .PHONY: clean
 clean:
