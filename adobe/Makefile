@@ -180,3 +180,13 @@ cut-release-tags: check-version
 		else echo "PUSH=0 set; all tags already exist on origin."; fi; \
 		echo "(GitHub release skipped; after pushing run: make -C adobe create-release)"; \
 	fi
+
+# Full release: prod image build, then tag + push + GitHub release. No snapshot.
+# Recursive $(MAKE) calls (not prerequisites) so each stage fully finishes
+# before the next starts, same pattern cut-release-tags uses for create-release.
+.PHONY: full-release
+full-release: check-version
+	@echo "==> Building release image"
+	$(MAKE) --no-print-directory release
+	@echo "==> Cutting release tags and GitHub release"
+	$(MAKE) --no-print-directory cut-release-tags
