@@ -940,6 +940,41 @@
             "boolean",
             "null"
           ]
+        },
+        "success": {
+          "description": "Authoritative operation outcome, stamped on every MCP request after the result is observed. None until the MCP layer stamps an outcome; absent for requests that never reach the MCP layer.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "error": {
+          "description": "Categorical error info. Absent on success.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "type": {
+              "description": "Categorical error type: permission_denied | timeout | connection_error | upstream_error | upstream_tool_error.",
+              "type": "string"
+            },
+            "message": {
+              "description": "Sanitized error message (max 500 bytes, UTF-8-safe).",
+              "type": "string"
+            },
+            "code": {
+              "description": "JSON-RPC error code when the error originated from a JSON-RPC error response. Absent for RBAC denials and transport errors.",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
         }
       }
     },

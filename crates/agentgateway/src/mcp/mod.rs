@@ -185,6 +185,26 @@ pub struct MCPTool {
 	pub error: Option<serde_json::Value>,
 }
 
+/// Adobe-only: categorical error info stamped on every MCP failure path and
+/// exposed to access-log CEL as `mcp.error.*`.
+#[cfg(feature = "adobe")]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, ::cel::DynamicType)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct McpErrorInfo {
+	/// Categorical error type: permission_denied | timeout | connection_error |
+	/// upstream_error | upstream_tool_error | rate_limited.
+	#[serde(rename = "type")]
+	#[dynamic(rename = "type")]
+	pub error_type: String,
+	/// Sanitized error message (max 500 bytes, UTF-8-safe).
+	#[serde(rename = "message")]
+	#[dynamic(rename = "message")]
+	pub error_message: String,
+	/// JSON-RPC error code when the error originated from a JSON-RPC error response.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub code: Option<i32>,
+}
+
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, ::cel::DynamicType)]
 #[serde(rename_all = "camelCase")]
 #[dynamic(rename_all = "camelCase")]
@@ -207,6 +227,18 @@ pub struct MCPInfo {
 	/// response/increment path when the terminal MCP result is known.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub is_error: Option<bool>,
+	/// Adobe-only: authoritative operation outcome, stamped on every MCP request
+	/// after the operation has been observed. Mirrors the CSCS pattern where the
+	/// proxy layer is the source of truth for success (not derived downstream).
+	/// None until the MCP layer stamps an outcome.
+	#[cfg(feature = "adobe")]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub success: Option<bool>,
+	/// Adobe-only: categorical error info for access-log CEL (`mcp.error.*`).
+	/// Absent on success.
+	#[cfg(feature = "adobe")]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub error: Option<McpErrorInfo>,
 	/// Adobe-only: in-memory carrier for the `mcp_upstream_errors_total` metric.
 	/// Set by single-target dispatch on a classified upstream failure and read at
 	/// the `log.rs` finalize site. `#[serde(skip)]` keeps it out of serde, the CEL
@@ -339,6 +371,54 @@ impl MCPInfo {
 	pub fn set_backend_name(&mut self, name: &str) {
 		self.backend_name = Some(name.to_string());
 	}
+
+	/// Stamp `success = true` and clear any prior error info.
+	#[cfg(feature = "adobe")]
+	pub fn stamp_success(&mut self) {
+		self.success = Some(true);
+		self.error = None;
+	}
+
+	/// Stamp `success = false` and populate categorical error info.
+	#[cfg(feature = "adobe")]
+	pub fn stamp_error(&mut self, error_type: &str, error_message: String, code: Option<i32>) {
+		self.success = Some(false);
+		self.error = Some(McpErrorInfo {
+			error_type: error_type.to_string(),
+			error_message,
+			code,
+		});
+	}
+}
+
+/// Truncate `s` to at most 500 bytes, walking back to a valid UTF-8 boundary.
+#[cfg(feature = "adobe")]
+pub fn sanitize_error_message(s: &str) -> String {
+	const MAX_BYTES: usize = 500;
+	if s.len() <= MAX_BYTES {
+		return s.to_string();
+	}
+	let mut end = MAX_BYTES;
+	while end > 0 && !s.is_char_boundary(end) {
+		end -= 1;
+	}
+	s[..end].to_string()
+}
+
+/// Classify an `UpstreamError` into the CEL-visible error_type categories.
+/// Non-transport errors (RBAC, invalid request, etc.) are classified at a higher layer.
+#[cfg(feature = "adobe")]
+pub fn classify_upstream_error_for_cel(e: &UpstreamError) -> &'static str {
+	use crate::proxy::ProxyError;
+	match e {
+		UpstreamError::Proxy(ProxyError::UpstreamCallTimeout)
+		| UpstreamError::Proxy(ProxyError::RequestTimeout) => "timeout",
+		UpstreamError::Http(ClientError::General(_))
+		| UpstreamError::Http(ClientError::Proxy(_)) => "connection_error",
+		UpstreamError::Http(ClientError::Status(r)) if r.status().as_u16() >= 500 => "upstream_error",
+		UpstreamError::FanoutError { source, .. } => classify_upstream_error_for_cel(source),
+		_ => "upstream_error",
+	}
 }
 
 impl From<&ResourceType> for MCPInfo {
@@ -413,6 +493,52 @@ mod mcp_info_semantics_tests {
 	#[test]
 	fn mcpoperation_task_display_is_task() {
 		assert_eq!(format!("{}", MCPOperation::Task), "task");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn sanitize_error_message_empty() {
+		assert_eq!(super::sanitize_error_message(""), "");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn sanitize_error_message_short() {
+		assert_eq!(super::sanitize_error_message("hello"), "hello");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn sanitize_error_message_exactly_500_bytes() {
+		let s: String = "a".repeat(500);
+		let result = super::sanitize_error_message(&s);
+		assert_eq!(result.len(), 500);
+		assert_eq!(result, s);
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn sanitize_error_message_ascii_over_budget() {
+		let s: String = "a".repeat(600);
+		let result = super::sanitize_error_message(&s);
+		assert_eq!(result.len(), 500);
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn sanitize_error_message_utf8_mid_rune_over_budget() {
+		// Each '€' is 3 bytes (UTF-8 E2 82 AC).
+		// 499 bytes of 'a' + '€' = 502 bytes. Truncating at 500 would split the 3-byte rune.
+		let mut s = "a".repeat(499);
+		s.push('€');
+		assert_eq!(s.len(), 502);
+		let result = super::sanitize_error_message(&s);
+		// Must be a valid UTF-8 string truncated before the rune boundary.
+		assert!(std::str::from_utf8(result.as_bytes()).is_ok());
+		assert!(result.len() <= 500);
+		// The euro sign must be dropped since it would split at byte 500.
+		assert!(!result.contains('€'));
+		assert_eq!(result, "a".repeat(499));
 	}
 
 	#[cfg(feature = "adobe")]

@@ -872,10 +872,13 @@ impl Relay {
 				// Adobe-only: classify + stash the upstream error_type for
 				// mcp_upstream_errors_total (emitted at the log.rs finalize site).
 				#[cfg(feature = "adobe")]
-				if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e)
-					&& let Some(log) = &mcp_log
-				{
-					log.non_atomic_mutate(|i| i.set_upstream_error(t));
+				if let Some(log) = &mcp_log {
+					if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e) {
+						log.non_atomic_mutate(|i| i.set_upstream_error(t));
+					}
+					let et = super::classify_upstream_error_for_cel(&e);
+					let msg = super::sanitize_error_message(&e.to_string());
+					log.non_atomic_mutate(|i| i.stamp_error(et, msg, None));
 				}
 				return Err(e);
 			},
@@ -1152,11 +1155,13 @@ impl Relay {
 			Err(e) => {
 				// Adobe-only: classify + stash the upstream error_type for
 				// mcp_upstream_errors_total (emitted at the log.rs finalize site).
-				#[cfg(feature = "adobe")]
-				if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e)
-					&& let Some(log) = &mcp_log
-				{
-					log.non_atomic_mutate(|i| i.set_upstream_error(t));
+				if let Some(log) = &mcp_log {
+					if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e) {
+						log.non_atomic_mutate(|i| i.set_upstream_error(t));
+					}
+					let et = super::classify_upstream_error_for_cel(&e);
+					let msg = super::sanitize_error_message(&e.to_string());
+					log.non_atomic_mutate(|i| i.stamp_error(et, msg, None));
 				}
 				return Err(e);
 			},
@@ -1194,10 +1199,13 @@ impl Relay {
 		let stream = match us.generic_stream(r, &ctx).await {
 			Ok(s) => s,
 			Err(e) => {
-				if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e)
-					&& let Some(log) = &mcp_log
-				{
-					log.non_atomic_mutate(|i| i.set_upstream_error(t));
+				if let Some(log) = &mcp_log {
+					if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e) {
+						log.non_atomic_mutate(|i| i.set_upstream_error(t));
+					}
+					let et = super::classify_upstream_error_for_cel(&e);
+					let msg = super::sanitize_error_message(&e.to_string());
+					log.non_atomic_mutate(|i| i.stamp_error(et, msg, None));
 				}
 				return Err(e);
 			},
@@ -1683,12 +1691,45 @@ fn capture_terminal_mcp_payload(
 ) -> bool {
 	match message {
 		ServerJsonRpcMessage::Response(response) if response.id == *request_id => {
-			if let ServerResult::CallToolResult(result) = &response.result {
-				log.non_atomic_mutate(|mcp| mcp.capture_call_result(result));
+			match &response.result {
+				ServerResult::CallToolResult(result) => {
+					if result.is_error == Some(true) {
+						#[cfg(feature = "adobe")]
+						{
+							let msg = result
+								.content
+								.first()
+								.and_then(|c| c.raw.as_text())
+								.map(|t| super::sanitize_error_message(&t.text))
+								.unwrap_or_default();
+							log.non_atomic_mutate(|mcp| {
+								mcp.stamp_error("upstream_tool_error", msg, None);
+							});
+						}
+					} else {
+						#[cfg(feature = "adobe")]
+						log.non_atomic_mutate(|mcp| mcp.stamp_success());
+					}
+					log.non_atomic_mutate(|mcp| mcp.capture_call_result(result));
+				},
+				_ => {
+					#[cfg(feature = "adobe")]
+					log.non_atomic_mutate(|mcp| mcp.stamp_success());
+				},
 			}
 			true
 		},
 		ServerJsonRpcMessage::Error(error) if error.id == *request_id => {
+			#[cfg(feature = "adobe")]
+			{
+				let err_msg = super::sanitize_error_message(&error.error.message);
+				let code = error.error.code.0;
+				log.non_atomic_mutate(|mcp| {
+					mcp.stamp_error("upstream_tool_error", err_msg, Some(code));
+					mcp.capture_call_error(&error.error);
+				});
+			}
+			#[cfg(not(feature = "adobe"))]
 			log.non_atomic_mutate(|mcp| mcp.capture_call_error(&error.error));
 			true
 		},
