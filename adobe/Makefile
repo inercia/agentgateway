@@ -56,6 +56,11 @@ DOCKER_BUILDX = docker buildx build \
 	--load \
 	--progress=plain
 
+# You might want to set `ulimit -n 10240` if you dont have enough file descriptors
+.PHONY: test
+test:
+	cargo test --all-targets --features agentgateway/adobe
+
 # snapshot/release use buildx local cache; bootstrap builder on first run: make setup-buildx
 .PHONY: setup-buildx ensure-buildx-builder check-version
 
