@@ -55,9 +55,14 @@ format:
 	cargo fmt -- --config imports_granularity=Module,group_imports=StdExternalCrate,normalize_comments=true
 
 # test
+# Adobe fork: build/run tests with the `adobe` feature so Adobe-only code and
+# its tests are exercised in CI (the Adobe pipeline runs `make test`). Notably
+# the hermetic tracing/AWS env-guard tests are gated behind `feature = "adobe"`
+# per adobe/CONVENTIONS.md; without this flag they compile out and the Ethos CI
+# ambient environment (OTEL_EXPORTER_OTLP_ENDPOINT, AWS_REGION/IMDS) fails them.
 .PHONY: test
 test:
-	cargo test --all-targets
+	cargo test --all-targets --features adobe
 
 .PHONY: test-release
 test-release:

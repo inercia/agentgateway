@@ -15,6 +15,28 @@ use crate::*;
 
 const TEST_OIDC_JWKS: &str = r#"{"keys":[{"use":"sig","kty":"EC","kid":"kid-1","crv":"P-256","alg":"ES256","x":"WM7udBHga09KxC5kxq6GhrZ9M3Y8S9ZThq_XxsOcDhk","y":"xc7T4afkXmwjEbJMzQXCdQcU3PZKiLFlHl23GE1z4ug"}]}"#;
 
+/// Remove every OTLP/OTEL tracing env var for the duration of the returned
+/// guard (restored on drop) and hold the shared env lock. `migrate_deprecated_local_config`
+/// round-trips through the env-aware `parse_config`, so without this an ambient
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` (present in Ethos CI) would override the endpoint
+/// declared in the config document under test.
+///
+/// Adobe-only (see `adobe/CONVENTIONS.md`): gated behind `feature = "adobe"`.
+#[cfg(feature = "adobe")]
+fn scoped_tracing_env() -> crate::test_env::ScopedEnv {
+	crate::test_env::scoped(&[
+		("OTLP_ENDPOINT", None),
+		("OTEL_EXPORTER_OTLP_ENDPOINT", None),
+		("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", None),
+		("OTLP_HEADERS", None),
+		("OTEL_EXPORTER_OTLP_HEADERS", None),
+		("OTEL_EXPORTER_OTLP_TRACES_HEADERS", None),
+		("OTLP_PROTOCOL", None),
+		("OTEL_EXPORTER_OTLP_PROTOCOL", None),
+		("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", None),
+	])
+}
+
 fn test_client() -> client::Client {
 	client::Client::new(
 		&client::Config {
@@ -1039,6 +1061,8 @@ binds:
 
 #[test]
 fn test_migrate_deprecated_local_config_moves_fields() {
+	#[cfg(feature = "adobe")]
+	let _env = scoped_tracing_env();
 	let input = r#"
 config:
   logging:
@@ -1093,6 +1117,8 @@ fn test_deprecated_tracing_endpoint_schemes(
 	#[case] protocol: &str,
 	#[case] expected: &str,
 ) {
+	#[cfg(feature = "adobe")]
+	let _env = scoped_tracing_env();
 	let input =
 		format!("config:\n  tracing:\n    otlpEndpoint: {endpoint}\n    otlpProtocol: {protocol}\n");
 	let out = super::migrate_deprecated_local_config(&input).unwrap();
@@ -1104,6 +1130,8 @@ fn test_deprecated_tracing_endpoint_schemes(
 #[rstest::rstest]
 #[case::unrecognized_scheme("nateisgreat://tracing.example.com:4317")]
 fn test_deprecated_tracing_endpoint_unrecognized_scheme_error(#[case] endpoint: &str) {
+	#[cfg(feature = "adobe")]
+	let _env = scoped_tracing_env();
 	let input =
 		format!("config:\n  tracing:\n    otlpEndpoint: {endpoint}\n    otlpProtocol: grpc\n");
 	let err = super::migrate_deprecated_local_config(&input)

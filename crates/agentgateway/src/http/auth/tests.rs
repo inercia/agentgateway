@@ -319,8 +319,22 @@ async fn test_aws_sign_requestallback() {
 
 #[tokio::test(start_paused = true)]
 async fn test_aws_sign_request_no_region_error() {
+	// Adobe: force a region-less AWS config so this test exercises the "no region"
+	// path on Ethos/AWS CI, where the region otherwise resolves from AWS_REGION or
+	// the EC2/ECS instance metadata service (IMDS). Neutralize all sources,
+	// restoring them on drop. (Lock-free guard: held across the .await below, and
+	// no other test contends on these vars or the cached global SdkConfig.)
+	// Non-Adobe keeps upstream's laptop-only AWS_PROFILE guard.
+	#[cfg(feature = "adobe")]
+	let _env = crate::test_env::EnvRestore::apply(&[
+		("AWS_PROFILE", Some("/dev/null")),
+		("AWS_EC2_METADATA_DISABLED", Some("true")),
+		("AWS_REGION", None),
+		("AWS_DEFAULT_REGION", None),
+	]);
+	#[cfg(not(feature = "adobe"))]
+	// prevent loading from default profile on developer's laptops, so this test passes consistently.
 	unsafe {
-		// prevent loading from default profile on developer's laptops, so this test passes consistently.
 		std::env::set_var("AWS_PROFILE", "/dev/null");
 	}
 

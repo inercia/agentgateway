@@ -914,12 +914,23 @@ mod parse_headers_tests {
 mod tests {
 	use std::env;
 	use std::ffi::OsString;
-	use std::sync::{LazyLock, Mutex};
 
 	use super::*;
 
-	static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+	// Adobe: share the crate-wide env lock so the hermetic tests in other modules
+	// (e.g. types::local::tests) that clear the same process-global OTLP/OTEL vars
+	// are serialized against these tests. Non-Adobe keeps the original module-local
+	// lock (upstream behavior).
+	#[cfg(feature = "adobe")]
+	fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+		crate::test_env::lock()
+	}
 
+	#[cfg(not(feature = "adobe"))]
+	static ENV_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+		std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
+	#[cfg(not(feature = "adobe"))]
 	fn lock_env() -> std::sync::MutexGuard<'static, ()> {
 		ENV_LOCK.lock().expect("env mutex poisoned")
 	}
@@ -1112,6 +1123,15 @@ config:
 	#[test]
 	fn tracing_requires_endpoint_from_config_or_env() {
 		let _env_lock = lock_env();
+		// Adobe: neutralize any ambient OTLP endpoint (Ethos CI sets
+		// OTEL_EXPORTER_OTLP_ENDPOINT); "" is treated as unset via empty_to_none,
+		// so parse_config must report the missing-endpoint error under test.
+		#[cfg(feature = "adobe")]
+		let _clear_otlp = TempEnvVar::set("OTLP_ENDPOINT", "");
+		#[cfg(feature = "adobe")]
+		let _clear_otel = TempEnvVar::set("OTEL_EXPORTER_OTLP_ENDPOINT", "");
+		#[cfg(feature = "adobe")]
+		let _clear_traces = TempEnvVar::set("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "");
 
 		let err = parse_config(
 			r#"

@@ -46,6 +46,85 @@ pub mod types;
 mod ui;
 pub mod util;
 
+/// Test-only helpers for tests that read process-global environment variables.
+///
+/// Several config/tracing/AWS code paths resolve settings from the environment
+/// (e.g. `OTEL_EXPORTER_OTLP_ENDPOINT`, `AWS_REGION`). Tests exercising those
+/// paths must neutralize ambient values so they pass regardless of the host
+/// environment (a bare dev shell vs. an Ethos/AWS CI container). Because env is
+/// process-global and tests run in parallel, all such tests share one lock.
+///
+/// Adobe-only: gated behind `feature = "adobe"` so the non-Adobe build matches
+/// upstream (see `adobe/CONVENTIONS.md`). The Adobe CI must run tests with
+/// `--features adobe` for these guards to take effect.
+#[cfg(all(test, feature = "adobe"))]
+pub(crate) mod test_env {
+	use std::ffi::OsString;
+	use std::sync::{LazyLock, Mutex, MutexGuard};
+
+	static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+	/// Acquire the shared env lock (for tests that set their own vars).
+	pub(crate) fn lock() -> MutexGuard<'static, ()> {
+		LOCK.lock().unwrap_or_else(|poison| poison.into_inner())
+	}
+
+	/// Applies `vars` (`Some` = set, `None` = remove) on construction and
+	/// restores the previous values on drop. Holds no lock, so it is safe to
+	/// keep alive across `.await` in async tests; use [`scoped`] when
+	/// serialization against other env-mutating tests is also required.
+	pub(crate) struct EnvRestore {
+		saved: Vec<(String, Option<OsString>)>,
+	}
+
+	impl EnvRestore {
+		pub(crate) fn apply(vars: &[(&str, Option<&str>)]) -> Self {
+			let mut saved = Vec::with_capacity(vars.len());
+			for (key, value) in vars {
+				saved.push(((*key).to_string(), std::env::var_os(key)));
+				match value {
+					Some(v) => unsafe { std::env::set_var(key, v) },
+					None => unsafe { std::env::remove_var(key) },
+				}
+			}
+			Self { saved }
+		}
+	}
+
+	impl Drop for EnvRestore {
+		fn drop(&mut self) {
+			for (key, prev) in &self.saved {
+				match prev {
+					Some(v) => unsafe { std::env::set_var(key, v) },
+					None => unsafe { std::env::remove_var(key) },
+				}
+			}
+		}
+	}
+
+	/// Like [`EnvRestore::apply`] but also holds the shared env lock for its
+	/// lifetime, serializing (synchronous) tests that mutate the same
+	/// process-global vars so they cannot observe each other's changes.
+	///
+	/// Field order is load-bearing: Rust drops fields in declaration order, so
+	/// `_restore` (restore the env) must come before `_guard` (release the lock).
+	/// Restoring after releasing the lock would let this guard's restored ambient
+	/// values bleed into the next test that has already acquired the lock.
+	pub(crate) struct ScopedEnv {
+		_restore: EnvRestore,
+		_guard: MutexGuard<'static, ()>,
+	}
+
+	pub(crate) fn scoped(vars: &[(&str, Option<&str>)]) -> ScopedEnv {
+		let guard = lock();
+		let restore = EnvRestore::apply(vars);
+		ScopedEnv {
+			_restore: restore,
+			_guard: guard,
+		}
+	}
+}
+
 use control::caclient;
 use telemetry::{metrics, trc};
 
