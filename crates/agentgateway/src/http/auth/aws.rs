@@ -131,6 +131,15 @@ fn signing_service_name<'a>(req: &'a http::Request, aws_auth: &'a AwsAuth) -> &'
 		.unwrap_or("bedrock")
 }
 
+/// Resolve the signing region from the process default AWS config, or return a
+/// descriptive error if none is configured. Split out from `sign_request` so
+/// the no-region error path can be unit-tested deterministically, without
+/// depending on the ambient AWS environment or the process-global cached
+/// `SdkConfig` (which on AWS CI always resolves a region via env vars or IMDS).
+pub(super) fn region_from_config_or_err(region: Option<&str>) -> anyhow::Result<&str> {
+	region.ok_or_else(|| anyhow::anyhow!("No region found in AWS config or request extensions"))
+}
+
 pub(super) async fn sign_request(
 	req: &mut http::Request,
 	aws_auth: &AwsAuth,
@@ -150,9 +159,7 @@ pub(super) async fn sign_request(
 			} else {
 				// Fall back to region from AWS config
 				let config = Box::pin(sdk_config()).await;
-				config.region().map(|r| r.as_ref()).ok_or(anyhow::anyhow!(
-					"No region found in AWS config or request extensions"
-				))?
+				region_from_config_or_err(config.region().map(|r| r.as_ref()))?
 			}
 		},
 	};

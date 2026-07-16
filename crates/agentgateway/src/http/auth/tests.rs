@@ -317,49 +317,15 @@ async fn test_aws_sign_requestallback() {
 		.expect("signing failed");
 }
 
-#[tokio::test(start_paused = true)]
-async fn test_aws_sign_request_no_region_error() {
-	// Adobe: force a region-less AWS config so this test exercises the "no region"
-	// path on Ethos/AWS CI, where the region otherwise resolves from AWS_REGION or
-	// the EC2/ECS instance metadata service (IMDS). Neutralize all sources,
-	// restoring them on drop. (Lock-free guard: held across the .await below, and
-	// no other test contends on these vars or the cached global SdkConfig.)
-	// Non-Adobe keeps upstream's laptop-only AWS_PROFILE guard.
-	#[cfg(feature = "adobe")]
-	let _env = crate::test_env::EnvRestore::apply(&[
-		("AWS_PROFILE", Some("/dev/null")),
-		("AWS_EC2_METADATA_DISABLED", Some("true")),
-		("AWS_REGION", None),
-		("AWS_DEFAULT_REGION", None),
-	]);
-	#[cfg(not(feature = "adobe"))]
-	// prevent loading from default profile on developer's laptops, so this test passes consistently.
-	unsafe {
-		std::env::set_var("AWS_PROFILE", "/dev/null");
-	}
-
-	// Test AWS signing fails with clear error when no region available
-	let mut req = crate::http::Request::new(crate::http::Body::empty());
-	*req.uri_mut() = "https://bedrock-runtime.amazonaws.com/model/invoke"
-		.parse()
-		.unwrap();
-	*req.method_mut() = http::Method::POST;
-
-	let aws_auth = AwsAuth::ExplicitConfig {
-		access_key_id: SecretString::new("AKIAIOSFODNN7EXAMPLE".into()),
-		secret_access_key: SecretString::new("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
-		region: None, // No region in config
-		session_token: None,
-		service_name: None,
-	};
-
-	// No default region in request extensions.
-
-	// Should fail with specific "Region must be specified" error
-	let result = aws::sign_request(&mut req, &aws_auth).await;
-	assert!(result.is_err(), "Should fail without region");
-
-	let err = result.unwrap_err().to_string();
+#[test]
+fn test_aws_sign_request_no_region_error() {
+	// When AwsAuth has no region and there's no region in request extensions,
+	// sign_request falls back to the process default AWS config and errors if
+	// that has no region. Exercise that error path directly via the extracted
+	// helper: going through sign_request/sdk_config here is non-deterministic on
+	// AWS CI, where the process-global cached SdkConfig resolves a region from
+	// ambient env/IMDS regardless of what this test does to the environment.
+	let err = aws::region_from_config_or_err(None).unwrap_err().to_string();
 	assert!(
 		err.contains("No region found in AWS config or request extensions"),
 		"Error should mention missing region, got: {}",
