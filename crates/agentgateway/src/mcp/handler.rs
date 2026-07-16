@@ -1155,6 +1155,7 @@ impl Relay {
 			Err(e) => {
 				// Adobe-only: classify + stash the upstream error_type for
 				// mcp_upstream_errors_total (emitted at the log.rs finalize site).
+				#[cfg(feature = "adobe")]
 				if let Some(log) = &mcp_log {
 					if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e) {
 						log.non_atomic_mutate(|i| i.set_upstream_error(t));
@@ -1199,6 +1200,7 @@ impl Relay {
 		let stream = match us.generic_stream(r, &ctx).await {
 			Ok(s) => s,
 			Err(e) => {
+				#[cfg(feature = "adobe")]
 				if let Some(log) = &mcp_log {
 					if let Some(t) = crate::metrics::adobe_metrics::classify_upstream_error(&e) {
 						log.non_atomic_mutate(|i| i.set_upstream_error(t));
