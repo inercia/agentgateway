@@ -2143,6 +2143,10 @@ pub fn full_example_executor() -> ExecutorSerde {
 			task: None,
 			is_error: None,
 			#[cfg(feature = "adobe")]
+			success: None,
+			#[cfg(feature = "adobe")]
+			error: None,
+			#[cfg(feature = "adobe")]
 			upstream_error: None,
 			#[cfg(feature = "adobe")]
 			backend_name: None,

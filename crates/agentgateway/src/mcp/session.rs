@@ -204,6 +204,14 @@ impl Session {
 			)),
 			cel,
 		) {
+			#[cfg(feature = "adobe")]
+			{
+				let msg = crate::mcp::sanitize_error_message(&format!(
+					"Unknown prompt: {}",
+					name
+				));
+				log.non_atomic_mutate(|l| l.stamp_error("permission_denied", msg, None));
+			}
 			return Err(UpstreamError::Authorization {
 				resource_type: "prompt".to_string(),
 				resource_name: name.to_string(),
@@ -291,6 +299,14 @@ impl Session {
 			)),
 			cel,
 		) {
+			#[cfg(feature = "adobe")]
+			{
+				let msg = crate::mcp::sanitize_error_message(&format!(
+					"Unknown resource: {}",
+					uri
+				));
+				log.non_atomic_mutate(|l| l.stamp_error("permission_denied", msg, None));
+			}
 			return Err(UpstreamError::Authorization {
 				resource_type: "resource".to_string(),
 				resource_name: uri.to_string(),
@@ -349,7 +365,7 @@ impl Session {
 							);
 						}
 					},
-					None,
+					Some(log.clone()),
 				)
 				.await;
 		}
@@ -713,7 +729,7 @@ impl Session {
 						// Set upstream name before guardrails so CEL (e.g. mcp.tool.name in rate-limit
 						// descriptors) sees the canonical upstream name, consistent with RBAC rules.
 						ctr.params.name = upstream_tool.clone().into();
-						self
+						if let Err(e) = self
 							.authorize_with_ctx(
 								service_name.as_str(),
 								mcp::guardrails::methods::TOOLS_CALL,
@@ -726,7 +742,18 @@ impl Session {
 								"tool",
 								&name,
 							)
-							.await?;
+							.await
+						{
+							#[cfg(feature = "adobe")]
+							if matches!(e, UpstreamError::Authorization { .. }) {
+								let msg = crate::mcp::sanitize_error_message(&format!(
+									"Unknown tool: {}",
+									name
+								));
+								log.non_atomic_mutate(|l| l.stamp_error("permission_denied", msg, None));
+							}
+							return Err(e);
+						}
 						// Re-apply after authorize in case a remote guardrail returned Mutated params.
 						ctr.params.name = upstream_tool.into();
 
@@ -771,7 +798,7 @@ impl Session {
 						// Set upstream name before guardrails so CEL (e.g. mcp.prompt.name in rate-limit
 						// descriptors) sees the canonical upstream name, consistent with RBAC rules.
 						gpr.params.name = upstream_prompt.clone();
-						self
+						if let Err(e) = self
 							.authorize_with_ctx(
 								service_name.as_str(),
 								mcp::guardrails::methods::PROMPTS_GET,
@@ -784,10 +811,21 @@ impl Session {
 								"prompt",
 								&name,
 							)
-							.await?;
+							.await
+						{
+							#[cfg(feature = "adobe")]
+							if matches!(e, UpstreamError::Authorization { .. }) {
+								let msg = crate::mcp::sanitize_error_message(&format!(
+									"Unknown prompt: {}",
+									name
+								));
+								log.non_atomic_mutate(|l| l.stamp_error("permission_denied", msg, None));
+							}
+							return Err(e);
+						}
 						// Re-apply after authorize in case a remote guardrail returned Mutated params.
 						gpr.params.name = upstream_prompt;
-						self.relay.send_single(r, ctx, service_name.as_str(), None).await
+						self.relay.send_single(r, ctx, service_name.as_str(), Some(log.clone())).await
 					},
 					ClientRequest::ReadResourceRequest(_) => {
 						self

@@ -1027,7 +1027,11 @@ fn access_log_payload_policy() -> crate::types::frontend::LoggingPolicy {
 				"mcp_prompt_target_cel": "mcp.prompt.target",
 				"mcp_args_cel": "mcp.tool.arguments",
 				"mcp_result_cel": "mcp.tool.result",
-				"mcp_error_cel": "mcp.tool.error"
+				"mcp_error_cel": "mcp.tool.error",
+				"mcp_success_cel": "mcp.success",
+				"mcp_error_type_cel": "mcp.error.type",
+				"mcp_error_msg_cel": "mcp.error.message",
+				"mcp_error_code_cel": "mcp.error.code"
 			}
 		}))
 		.unwrap();
@@ -1137,6 +1141,14 @@ async fn tool_call_exposes_payload_fields_to_access_log_cel() {
 	);
 	assert!(log.get("gen_ai.tool.call.arguments").is_none());
 	assert!(log.get("gen_ai.tool.call.result").is_none());
+
+	#[cfg(feature = "adobe")]
+	{
+		assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(true)));
+		assert!(log.get("mcp_error_type_cel").is_none());
+		assert!(log.get("mcp_error_msg_cel").is_none());
+		assert!(log.get("mcp_error_code_cel").is_none());
+	}
 }
 
 #[tokio::test]
@@ -1193,6 +1205,23 @@ async fn tool_call_error_exposes_error_payload_to_access_log_cel() {
 	);
 	assert!(log.get("gen_ai.tool.call.arguments").is_none());
 	assert!(log.get("gen_ai.tool.call.result").is_none());
+
+	#[cfg(feature = "adobe")]
+	{
+		assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
+		assert_eq!(
+			log.get("mcp_error_type_cel"),
+			Some(&serde_json::json!("upstream_tool_error"))
+		);
+		assert!(
+			log["mcp_error_msg_cel"]
+				.as_str()
+				.is_some_and(|m| m.contains("tool")),
+			"mcp_error_msg_cel should mention 'tool', got: {:?}",
+			log.get("mcp_error_msg_cel")
+		);
+		assert_eq!(log.get("mcp_error_code_cel"), Some(&serde_json::json!(-32602)));
+	}
 }
 
 #[tokio::test]
@@ -1246,6 +1275,84 @@ async fn legacy_sse_tool_call_exposes_arguments_without_terminal_payloads() {
 	);
 	assert!(log.get("gen_ai.tool.call.arguments").is_none());
 	assert!(log.get("gen_ai.tool.call.result").is_none());
+}
+
+/// Verify that RBAC-denied tool calls stamp `mcp.success = false` and
+/// `mcp.error.type = "permission_denied"` in the access-log CEL context.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn rbac_denial_exposes_permission_denied_to_access_log_cel() {
+	let mock = mock_streamable_http_server(true).await;
+	let trace_id = format!("mcp-rbac-{}", uuid::Uuid::new_v4());
+
+	let deny_all_policy = McpAuthorization::new(RuleSet::new(PolicySet::new(
+		vec![],
+		vec![Arc::new(crate::cel::Expression::new_strict("true").unwrap())],
+		vec![],
+	)));
+
+	let (mut t, io) = setup_proxy_policies(
+		&mock,
+		true,
+		false,
+		vec![BackendTrafficPolicy::McpAuthorization(deny_all_policy)],
+	)
+	.await;
+
+	// Attach the access-log policy so CEL fields are emitted.
+	let listener_name = t
+		.pi
+		.stores
+		.read_binds()
+		.bind(&BIND_KEY)
+		.unwrap()
+		.listeners
+		.iter()
+		.next()
+		.unwrap()
+		.name
+		.clone();
+	t.with_policy(TargetedPolicy {
+		key: "frontend/accessLog".into(),
+		name: None,
+		target: PolicyTarget::Gateway(listener_name.into()),
+		inheritance: crate::types::agent::PolicyInheritance::Default,
+		policy: FrontendPolicy::AccessLog(access_log_payload_policy()).into(),
+	});
+
+	let client = mcp_streamable_client(io).await;
+
+	let _ = client
+		.call_tool(
+			rmcp::model::CallToolRequestParams::new("echo").with_arguments(
+				serde_json::json!({ "traceId": trace_id })
+					.as_object()
+					.cloned()
+					.unwrap(),
+			),
+		)
+		.await;
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_trace", &trace_id),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
+	assert_eq!(
+		log.get("mcp_error_type_cel"),
+		Some(&serde_json::json!("permission_denied"))
+	);
+	assert!(
+		log["mcp_error_msg_cel"]
+			.as_str()
+			.is_some_and(|m| m.contains("echo")),
+		"mcp_error_msg_cel should mention the tool name 'echo', got: {:?}",
+		log.get("mcp_error_msg_cel")
+	);
+	assert!(log.get("mcp_error_code_cel").is_none());
 }
 
 #[tokio::test]

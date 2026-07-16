@@ -134,6 +134,11 @@
 |`mcp.task.target`|string|The target of the resource|
 |`mcp.task.name`|string|The name of the resource|
 |`mcp.isError`|boolean|Outcome signal for increment gating (`mcp.isError` in CEL). Set on the<br>response/increment path when the terminal MCP result is known.|
+|`mcp.success`|boolean|Authoritative operation outcome, stamped on every MCP request after the result is observed.<br>None until the MCP layer stamps an outcome; absent for requests that never reach the MCP layer.|
+|`mcp.error`|object|Categorical error info. Absent on success.|
+|`mcp.error.type`|string|Categorical error type: `permission_denied`, `timeout`, `connection_error`, `upstream_error`, `upstream_tool_error`.|
+|`mcp.error.message`|string|Sanitized error message (max 500 bytes, UTF-8-safe).|
+|`mcp.error.code`|integer|JSON-RPC error code when the error originated from a JSON-RPC error response. Absent for RBAC denials and transport errors.|
 |`backend`|object|`backend` contains information about the backend being used.|
 |`backend.name`|string|The name of the backend being used. For example, `my-service` or `service/my-namespace/my-service:8080`.|
 |`backend.type`|enum|The type of backend.<br>Possible values: `ai`, `mcp`, `static`, `dynamic`, `service`, `unknown`.|
