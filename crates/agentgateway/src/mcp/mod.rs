@@ -450,7 +450,7 @@ impl From<&ResourceType> for MCPInfo {
 
 #[cfg(test)]
 mod mcp_info_semantics_tests {
-	use super::{MCPInfo, MCPOperation, ResourceId, ResourceType};
+	use super::{ClientError, MCPInfo, MCPOperation, ResourceId, ResourceType, UpstreamError};
 
 	#[test]
 	fn mcpinfo_default_is_empty() {
@@ -557,5 +557,81 @@ mod mcp_info_semantics_tests {
 		assert_eq!(m.backend_name, None);
 		m.set_backend_name("mcp-federated");
 		assert_eq!(m.backend_name.as_deref(), Some("mcp-federated"));
+	}
+
+	// --- classify_upstream_error_for_cel unit tests ---
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_upstream_call_timeout() {
+		use crate::proxy::ProxyError;
+		let e = UpstreamError::Proxy(ProxyError::UpstreamCallTimeout);
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "timeout");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_request_timeout() {
+		use crate::proxy::ProxyError;
+		let e = UpstreamError::Proxy(ProxyError::RequestTimeout);
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "timeout");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_http_general_is_connection_error() {
+		use std::sync::Arc;
+		let inner = crate::http::Error::new("connection refused");
+		let e = UpstreamError::Http(ClientError::General(Arc::new(inner)));
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "connection_error");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_http_proxy_is_connection_error() {
+		use crate::proxy::ProxyError;
+		let e = UpstreamError::Http(ClientError::Proxy(ProxyError::NoValidBackends));
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "connection_error");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_http_5xx_is_upstream_error() {
+		let resp = ::http::Response::builder()
+			.status(502)
+			.body(crate::http::Body::default())
+			.unwrap();
+		let e = UpstreamError::Http(ClientError::Status(Box::new(resp)));
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "upstream_error");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_http_4xx_falls_through_to_upstream_error() {
+		let resp = ::http::Response::builder()
+			.status(404)
+			.body(crate::http::Body::default())
+			.unwrap();
+		let e = UpstreamError::Http(ClientError::Status(Box::new(resp)));
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "upstream_error");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_fanout_delegates_to_inner() {
+		use crate::proxy::ProxyError;
+		let inner = UpstreamError::Proxy(ProxyError::UpstreamCallTimeout);
+		let e = UpstreamError::FanoutError {
+			name: "target-a".to_string(),
+			source: Box::new(inner),
+		};
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "timeout");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_send_falls_through_to_upstream_error() {
+		let e = UpstreamError::Send;
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "upstream_error");
 	}
 }
