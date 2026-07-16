@@ -1639,6 +1639,185 @@ async fn prompt_get_success_stamps_mcp_success_true() {
 	assert!(log.get("mcp_error_code_cel").is_none());
 }
 
+/// Verify that an HTTP 5xx from the upstream stamps `mcp.success = false` and
+/// `mcp.error.type = "upstream_error"` in the access-log CEL context.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn upstream_5xx_exposes_upstream_error_to_access_log_cel() {
+	let mock =
+		mock_streamable_http_server_failing_tools_call(::http::StatusCode::BAD_GATEWAY).await;
+	let trace_id = format!("mcp-5xx-{}", uuid::Uuid::new_v4());
+
+	let (mut t, io) = setup_proxy_policies(&mock, true, false, vec![]).await;
+
+	let listener_name = t
+		.pi
+		.stores
+		.read_binds()
+		.bind(&BIND_KEY)
+		.unwrap()
+		.listeners
+		.iter()
+		.next()
+		.unwrap()
+		.name
+		.clone();
+	t.with_policy(TargetedPolicy {
+		key: "frontend/accessLog".into(),
+		name: None,
+		target: PolicyTarget::Gateway(listener_name.into()),
+		inheritance: crate::types::agent::PolicyInheritance::Default,
+		policy: FrontendPolicy::AccessLog(access_log_payload_policy()).into(),
+	});
+
+	let trace_id_clone = trace_id.clone();
+	let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+		let handle = tokio::task::spawn(async move {
+			let client = mcp_streamable_client(io).await;
+			let _ = client
+				.call_tool(
+					rmcp::model::CallToolRequestParams::new("echo").with_arguments(
+						serde_json::json!({ "traceId": trace_id_clone })
+							.as_object()
+							.cloned()
+							.unwrap(),
+					),
+				)
+				.await;
+		});
+		let _ = handle.await;
+	})
+	.await;
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_trace", &trace_id),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
+	assert_eq!(
+		log.get("mcp_error_type_cel"),
+		Some(&serde_json::json!("upstream_error"))
+	);
+	assert!(
+		log["mcp_error_msg_cel"]
+			.as_str()
+			.is_some_and(|m| !m.is_empty()),
+		"mcp_error_msg_cel should be non-empty, got: {:?}",
+		log.get("mcp_error_msg_cel")
+	);
+	// Transport error — no JSON-RPC code
+	assert!(log.get("mcp_error_code_cel").is_none());
+}
+
+/// Verify that an upstream timeout stamps `mcp.success = false` and
+/// error fields in the access-log CEL context.
+///
+/// NOTE: The MCP proxy path wraps timeouts as `ClientError::General(Error("upstream
+/// call timeout"))`, which `classify_upstream_error_for_cel` maps to `"connection_error"`
+/// rather than `"timeout"`. The `"timeout"` classification only fires for
+/// `ProxyError::UpstreamCallTimeout` / `RequestTimeout`, which are produced by the HTTP
+/// proxy path (httpproxy.rs) but not the MCP client path. This test asserts the actual
+/// behavior; fixing the classification to detect timeouts inside `ClientError::General`
+/// is tracked separately.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn upstream_timeout_exposes_error_to_access_log_cel() {
+	use std::time::Duration;
+
+	// Mock delays tools/call by 2s; backend timeout set to 200ms → triggers timeout
+	let mock = mock_streamable_http_server_slow_tools_call(Duration::from_secs(2)).await;
+	let trace_id = format!("mcp-timeout-{}", uuid::Uuid::new_v4());
+
+	let (mut t, io) = setup_proxy_policies(&mock, true, false, vec![]).await;
+
+	// Attach a short backend-request timeout at the route level.
+	let route_name = crate::types::agent::RouteName {
+		name: "route".into(),
+		namespace: Default::default(),
+		rule_name: None,
+		kind: None,
+	};
+	t.with_policy(TargetedPolicy {
+		key: "traffic/timeout".into(),
+		name: None,
+		target: PolicyTarget::Route(route_name),
+		inheritance: crate::types::agent::PolicyInheritance::Default,
+		policy: crate::types::agent::TrafficPolicy::Timeout(
+			crate::http::timeout::Policy {
+				request_timeout: None,
+				backend_request_timeout: Some(Duration::from_millis(200)),
+			},
+		)
+		.into(),
+	});
+
+	let listener_name = t
+		.pi
+		.stores
+		.read_binds()
+		.bind(&BIND_KEY)
+		.unwrap()
+		.listeners
+		.iter()
+		.next()
+		.unwrap()
+		.name
+		.clone();
+	t.with_policy(TargetedPolicy {
+		key: "frontend/accessLog".into(),
+		name: None,
+		target: PolicyTarget::Gateway(listener_name.into()),
+		inheritance: crate::types::agent::PolicyInheritance::Default,
+		policy: FrontendPolicy::AccessLog(access_log_payload_policy()).into(),
+	});
+
+	let trace_id_clone = trace_id.clone();
+	let _ = tokio::time::timeout(Duration::from_secs(5), async {
+		let handle = tokio::task::spawn(async move {
+			let client = mcp_streamable_client(io).await;
+			let _ = client
+				.call_tool(
+					rmcp::model::CallToolRequestParams::new("echo").with_arguments(
+						serde_json::json!({ "traceId": trace_id_clone })
+							.as_object()
+							.cloned()
+							.unwrap(),
+					),
+				)
+				.await;
+		});
+		let _ = handle.await;
+	})
+	.await;
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_trace", &trace_id),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
+	// See NOTE above: MCP path timeouts classify as "connection_error" (not "timeout")
+	// because the hyper timeout wraps as ClientError::General, not ProxyError::UpstreamCallTimeout.
+	assert_eq!(
+		log.get("mcp_error_type_cel"),
+		Some(&serde_json::json!("connection_error"))
+	);
+	assert!(
+		log["mcp_error_msg_cel"]
+			.as_str()
+			.is_some_and(|m| m.contains("timeout")),
+		"mcp_error_msg_cel should mention 'timeout', got: {:?}",
+		log.get("mcp_error_msg_cel")
+	);
+	// Transport error — no JSON-RPC code
+	assert!(log.get("mcp_error_code_cel").is_none());
+}
+
 #[tokio::test]
 async fn prompt_request_emits_gen_ai_prompt_name() {
 	let mock = mock_streamable_http_server(true).await;
@@ -1952,6 +2131,67 @@ async fn mock_streamable_http_server_failing_tools_call(status: ::http::StatusCo
 			.with_graceful_shutdown(async { rx.await.unwrap() })
 			.await;
 		info!("failing-tools-call server stopped");
+	});
+	MockServer {
+		addr,
+		init_counter,
+		_cancel: tx,
+	}
+}
+
+/// A streamable-HTTP MCP mock that completes the `initialize` handshake (and any
+/// `tools/list`) normally but adds a sleep of `delay` before every `tools/call`
+/// POST. Used to trigger `ProxyError::UpstreamCallTimeout` when a backend
+/// request timeout shorter than `delay` is configured.
+#[cfg(feature = "adobe")]
+async fn mock_streamable_http_server_slow_tools_call(delay: std::time::Duration) -> MockServer {
+	use mockserver::Counter;
+	use rmcp::transport::streamable_http_server::StreamableHttpService;
+	use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+
+	agent_core::telemetry::testing::setup_test_logging();
+	let init_counter = std::sync::Arc::new(tokio::sync::Mutex::new(0_i32));
+
+	let service = StreamableHttpService::new(
+		{
+			let init_counter = init_counter.clone();
+			move || Ok(Counter::new(init_counter.clone()))
+		},
+		LocalSessionManager::default().into(),
+		StreamableHttpServerConfig::default()
+			.with_sse_retry(None)
+			.with_sse_keep_alive(None)
+			.with_stateful_mode(true)
+			.with_json_response(false),
+	);
+
+	let (tx, rx) = tokio::sync::oneshot::channel();
+	let router = axum::Router::new()
+		.nest_service("/mcp", service)
+		.layer(axum::middleware::from_fn(
+			move |req: axum::extract::Request, next: axum::middleware::Next| async move {
+				let (parts, body) = req.into_parts();
+				let bytes = axum::body::to_bytes(body, usize::MAX)
+					.await
+					.unwrap_or_default();
+				let method = serde_json::from_slice::<serde_json::Value>(&bytes)
+					.ok()
+					.and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_string));
+				let req = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
+				if method.as_deref() == Some("tools/call") {
+					tokio::time::sleep(delay).await;
+				}
+				next.run(req).await
+			},
+		));
+
+	let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+	let addr = tcp_listener.local_addr().unwrap();
+	tokio::spawn(async move {
+		let _ = axum::serve(tcp_listener, router)
+			.with_graceful_shutdown(async { rx.await.unwrap() })
+			.await;
+		info!("slow-tools-call server stopped");
 	});
 	MockServer {
 		addr,
