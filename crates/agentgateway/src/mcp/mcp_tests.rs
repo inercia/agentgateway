@@ -1025,6 +1025,8 @@ fn access_log_payload_policy() -> crate::types::frontend::LoggingPolicy {
 				"mcp_tool_target_cel": "mcp.tool.target",
 				"mcp_prompt_name_cel": "mcp.prompt.name",
 				"mcp_prompt_target_cel": "mcp.prompt.target",
+				"mcp_resource_name_cel": "mcp.resource.name",
+				"mcp_resource_target_cel": "mcp.resource.target",
 				"mcp_args_cel": "mcp.tool.arguments",
 				"mcp_result_cel": "mcp.tool.result",
 				"mcp_error_cel": "mcp.tool.error",
@@ -1352,6 +1354,288 @@ async fn rbac_denial_exposes_permission_denied_to_access_log_cel() {
 		"mcp_error_msg_cel should mention the tool name 'echo', got: {:?}",
 		log.get("mcp_error_msg_cel")
 	);
+	assert!(log.get("mcp_error_code_cel").is_none());
+}
+
+/// Verify RBAC-denied resource reads stamp `mcp.success = false` and
+/// `mcp.error.type = "permission_denied"` in the access-log CEL context.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn rbac_denial_resource_exposes_permission_denied_to_access_log_cel() {
+	let mock = mock_streamable_http_server(true).await;
+
+	let deny_all_policy = McpAuthorization::new(RuleSet::new(PolicySet::new(
+		vec![],
+		vec![Arc::new(crate::cel::Expression::new_strict("true").unwrap())],
+		vec![],
+	)));
+
+	let (mut t, io) = setup_proxy_policies(
+		&mock,
+		true,
+		false,
+		vec![BackendTrafficPolicy::McpAuthorization(deny_all_policy)],
+	)
+	.await;
+
+	let listener_name = t
+		.pi
+		.stores
+		.read_binds()
+		.bind(&BIND_KEY)
+		.unwrap()
+		.listeners
+		.iter()
+		.next()
+		.unwrap()
+		.name
+		.clone();
+	t.with_policy(TargetedPolicy {
+		key: "frontend/accessLog".into(),
+		name: None,
+		target: PolicyTarget::Gateway(listener_name.into()),
+		inheritance: crate::types::agent::PolicyInheritance::Default,
+		policy: FrontendPolicy::AccessLog(access_log_payload_policy()).into(),
+	});
+
+	let client = mcp_streamable_client(io).await;
+	let resource_uri = format!("str:////rbac-resource-{}", uuid::Uuid::new_v4());
+
+	let _ = client
+		.read_resource(rmcp::model::ReadResourceRequestParams::new(&resource_uri))
+		.await;
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_resource_name_cel", &resource_uri),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
+	assert_eq!(
+		log.get("mcp_error_type_cel"),
+		Some(&serde_json::json!("permission_denied"))
+	);
+	assert!(
+		log["mcp_error_msg_cel"]
+			.as_str()
+			.is_some_and(|m| m.contains(&resource_uri)),
+		"mcp_error_msg_cel should mention the resource URI, got: {:?}",
+		log.get("mcp_error_msg_cel")
+	);
+	assert!(log.get("mcp_error_code_cel").is_none());
+}
+
+/// Verify RBAC-denied prompt gets stamp `mcp.success = false` and
+/// `mcp.error.type = "permission_denied"` in the access-log CEL context.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn rbac_denial_prompt_exposes_permission_denied_to_access_log_cel() {
+	let mock = mock_streamable_http_server(true).await;
+
+	let deny_all_policy = McpAuthorization::new(RuleSet::new(PolicySet::new(
+		vec![],
+		vec![Arc::new(crate::cel::Expression::new_strict("true").unwrap())],
+		vec![],
+	)));
+
+	let (mut t, io) = setup_proxy_policies(
+		&mock,
+		true,
+		false,
+		vec![BackendTrafficPolicy::McpAuthorization(deny_all_policy)],
+	)
+	.await;
+
+	let listener_name = t
+		.pi
+		.stores
+		.read_binds()
+		.bind(&BIND_KEY)
+		.unwrap()
+		.listeners
+		.iter()
+		.next()
+		.unwrap()
+		.name
+		.clone();
+	t.with_policy(TargetedPolicy {
+		key: "frontend/accessLog".into(),
+		name: None,
+		target: PolicyTarget::Gateway(listener_name.into()),
+		inheritance: crate::types::agent::PolicyInheritance::Default,
+		policy: FrontendPolicy::AccessLog(access_log_payload_policy()).into(),
+	});
+
+	let client = mcp_streamable_client(io).await;
+	let prompt_name = format!("rbac-prompt-{}", uuid::Uuid::new_v4());
+
+	let _ = client
+		.get_prompt(rmcp::model::GetPromptRequestParams::new(&prompt_name))
+		.await;
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_prompt_name_cel", &prompt_name),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
+	assert_eq!(
+		log.get("mcp_error_type_cel"),
+		Some(&serde_json::json!("permission_denied"))
+	);
+	assert!(
+		log["mcp_error_msg_cel"]
+			.as_str()
+			.is_some_and(|m| m.contains(&prompt_name)),
+		"mcp_error_msg_cel should mention the prompt name, got: {:?}",
+		log.get("mcp_error_msg_cel")
+	);
+	assert!(log.get("mcp_error_code_cel").is_none());
+}
+
+/// Verify that a resources/read JSON-RPC error stamps `mcp.success = false` and
+/// `mcp.error.type = "upstream_tool_error"` with the JSON-RPC error code.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn resource_read_error_exposes_error_payload_to_access_log_cel() {
+	let mock = mock_streamable_http_server(true).await;
+	let unknown_uri = format!("unknown://resource-{}", uuid::Uuid::new_v4());
+	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
+	let client = mcp_streamable_client(io).await;
+
+	let _ = client
+		.read_resource(rmcp::model::ReadResourceRequestParams::new(&unknown_uri))
+		.await;
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_resource_name_cel", &unknown_uri),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
+	assert_eq!(
+		log.get("mcp_error_type_cel"),
+		Some(&serde_json::json!("upstream_tool_error"))
+	);
+	assert!(
+		log["mcp_error_msg_cel"]
+			.as_str()
+			.is_some_and(|m| !m.is_empty()),
+		"mcp_error_msg_cel should be non-empty, got: {:?}",
+		log.get("mcp_error_msg_cel")
+	);
+	// JSON-RPC error code -32002 (RESOURCE_NOT_FOUND)
+	assert_eq!(
+		log.get("mcp_error_code_cel"),
+		Some(&serde_json::json!(-32002))
+	);
+}
+
+/// Verify that a prompts/get JSON-RPC error stamps `mcp.success = false` and
+/// `mcp.error.type = "upstream_tool_error"` with the JSON-RPC error code.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn prompt_get_error_exposes_error_payload_to_access_log_cel() {
+	let mock = mock_streamable_http_server(true).await;
+	let bad_prompt = format!("nonexistent-prompt-{}", uuid::Uuid::new_v4());
+	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
+	let client = mcp_streamable_client(io).await;
+
+	let _ = client
+		.get_prompt(rmcp::model::GetPromptRequestParams::new(&bad_prompt))
+		.await;
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_prompt_name_cel", &bad_prompt),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
+	assert_eq!(
+		log.get("mcp_error_type_cel"),
+		Some(&serde_json::json!("upstream_tool_error"))
+	);
+	assert!(
+		log["mcp_error_msg_cel"]
+			.as_str()
+			.is_some_and(|m| !m.is_empty()),
+		"mcp_error_msg_cel should be non-empty, got: {:?}",
+		log.get("mcp_error_msg_cel")
+	);
+	// JSON-RPC error code should be present (method_not_found or similar)
+	assert!(
+		log.get("mcp_error_code_cel").is_some(),
+		"mcp_error_code_cel should be populated for JSON-RPC errors"
+	);
+}
+
+/// Verify that a successful resources/read stamps `mcp.success = true` with no error fields.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn resource_read_success_stamps_mcp_success_true() {
+	let mock = mock_streamable_http_server(true).await;
+	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
+	let client = mcp_streamable_client(io).await;
+
+	let result = client
+		.read_resource(rmcp::model::ReadResourceRequestParams::new(
+			"str:////Users/to/some/path/",
+		))
+		.await
+		.unwrap();
+	assert!(!result.contents.is_empty());
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_resource_name_cel", "str:////Users/to/some/path/"),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(true)));
+	assert!(log.get("mcp_error_type_cel").is_none());
+	assert!(log.get("mcp_error_msg_cel").is_none());
+	assert!(log.get("mcp_error_code_cel").is_none());
+}
+
+/// Verify that a successful prompts/get stamps `mcp.success = true` with no error fields.
+#[cfg(feature = "adobe")]
+#[tokio::test]
+async fn prompt_get_success_stamps_mcp_success_true() {
+	let mock = mock_streamable_http_server(true).await;
+	let (_t, io) = setup_access_log_mcp_proxy(&mock).await;
+	let client = mcp_streamable_client(io).await;
+
+	let _ = client
+		.get_prompt(
+			rmcp::model::GetPromptRequestParams::new("example_prompt").with_arguments(
+				serde_json::json!({ "message": "hello" })
+					.as_object()
+					.cloned()
+					.unwrap(),
+			),
+		)
+		.await
+		.unwrap();
+
+	let log = agent_core::telemetry::testing::eventually_find(&[
+		("scope", "request"),
+		("mcp_prompt_name_cel", "example_prompt"),
+	])
+	.await
+	.unwrap();
+
+	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(true)));
+	assert!(log.get("mcp_error_type_cel").is_none());
+	assert!(log.get("mcp_error_msg_cel").is_none());
 	assert!(log.get("mcp_error_code_cel").is_none());
 }
 
