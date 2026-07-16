@@ -1713,18 +1713,10 @@ async fn upstream_5xx_exposes_upstream_error_to_access_log_cel() {
 }
 
 /// Verify that an upstream timeout stamps `mcp.success = false` and
-/// error fields in the access-log CEL context.
-///
-/// NOTE: The MCP proxy path wraps timeouts as `ClientError::General(Error("upstream
-/// call timeout"))`, which `classify_upstream_error_for_cel` maps to `"connection_error"`
-/// rather than `"timeout"`. The `"timeout"` classification only fires for
-/// `ProxyError::UpstreamCallTimeout` / `RequestTimeout`, which are produced by the HTTP
-/// proxy path (httpproxy.rs) but not the MCP client path. This test asserts the actual
-/// behavior; fixing the classification to detect timeouts inside `ClientError::General`
-/// is tracked separately.
+/// `mcp.error.type = "timeout"` in the access-log CEL context.
 #[cfg(feature = "adobe")]
 #[tokio::test]
-async fn upstream_timeout_exposes_error_to_access_log_cel() {
+async fn upstream_timeout_exposes_timeout_to_access_log_cel() {
 	use std::time::Duration;
 
 	// Mock delays tools/call by 2s; backend timeout set to 200ms → triggers timeout
@@ -1801,11 +1793,9 @@ async fn upstream_timeout_exposes_error_to_access_log_cel() {
 	.unwrap();
 
 	assert_eq!(log.get("mcp_success_cel"), Some(&serde_json::json!(false)));
-	// See NOTE above: MCP path timeouts classify as "connection_error" (not "timeout")
-	// because the hyper timeout wraps as ClientError::General, not ProxyError::UpstreamCallTimeout.
 	assert_eq!(
 		log.get("mcp_error_type_cel"),
-		Some(&serde_json::json!("connection_error"))
+		Some(&serde_json::json!("timeout"))
 	);
 	assert!(
 		log["mcp_error_msg_cel"]

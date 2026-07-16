@@ -412,7 +412,12 @@ pub fn classify_upstream_error_for_cel(e: &UpstreamError) -> &'static str {
 	use crate::proxy::ProxyError;
 	match e {
 		UpstreamError::Proxy(ProxyError::UpstreamCallTimeout)
-		| UpstreamError::Proxy(ProxyError::RequestTimeout) => "timeout",
+		| UpstreamError::Proxy(ProxyError::RequestTimeout)
+		// MCP path: McpHttpClient::call returns ProxyError, which streamablehttp.rs
+		// converts to ClientError::Proxy via #[from]. Match timeout variants before
+		// the catch-all Proxy(_) arm below.
+		| UpstreamError::Http(ClientError::Proxy(ProxyError::UpstreamCallTimeout))
+		| UpstreamError::Http(ClientError::Proxy(ProxyError::RequestTimeout)) => "timeout",
 		UpstreamError::Http(ClientError::General(_))
 		| UpstreamError::Http(ClientError::Proxy(_)) => "connection_error",
 		UpstreamError::Http(ClientError::Status(r)) if r.status().as_u16() >= 500 => "upstream_error",
@@ -592,6 +597,22 @@ mod mcp_info_semantics_tests {
 		use crate::proxy::ProxyError;
 		let e = UpstreamError::Http(ClientError::Proxy(ProxyError::NoValidBackends));
 		assert_eq!(super::classify_upstream_error_for_cel(&e), "connection_error");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_http_proxy_upstream_call_timeout_is_timeout() {
+		use crate::proxy::ProxyError;
+		let e = UpstreamError::Http(ClientError::Proxy(ProxyError::UpstreamCallTimeout));
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "timeout");
+	}
+
+	#[cfg(feature = "adobe")]
+	#[test]
+	fn classify_http_proxy_request_timeout_is_timeout() {
+		use crate::proxy::ProxyError;
+		let e = UpstreamError::Http(ClientError::Proxy(ProxyError::RequestTimeout));
+		assert_eq!(super::classify_upstream_error_for_cel(&e), "timeout");
 	}
 
 	#[cfg(feature = "adobe")]
